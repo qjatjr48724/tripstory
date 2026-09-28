@@ -7,6 +7,8 @@ import '../features/auth/presentation/pages/login_page.dart';
 import '../features/auth/presentation/pages/signup_page.dart';
 import '../features/auth/presentation/pages/splash_page.dart';
 import '../features/auth/presentation/providers/auth_providers.dart';
+import '../features/travel/presentation/pages/create_travel_page.dart';
+import '../features/travel/presentation/pages/travel_detail_page.dart';
 import '../features/travel/presentation/pages/travel_list_page.dart';
 
 /// 라우트 경로 상수
@@ -17,6 +19,7 @@ class AppRoutes {
   static const String login = '/login';
   static const String signup = '/signup';
   static const String travels = '/travels';
+  static const String createTravel = '/travels/create';
 }
 
 final goRouterProvider = Provider<GoRouter>((ref) {
@@ -64,6 +67,21 @@ final goRouterProvider = Provider<GoRouter>((ref) {
         path: AppRoutes.travels,
         name: 'travels',
         builder: (context, state) => const TravelListPage(),
+        routes: [
+          GoRoute(
+            path: 'create',
+            name: 'createTravel',
+            builder: (context, state) => const CreateTravelPage(),
+          ),
+          GoRoute(
+            path: ':travelId',
+            name: 'travelDetail',
+            builder: (context, state) {
+              final id = state.pathParameters['travelId']!;
+              return TravelDetailPage(travelId: id);
+            },
+          ),
+        ],
       ),
     ],
     errorBuilder: (context, state) => Scaffold(
