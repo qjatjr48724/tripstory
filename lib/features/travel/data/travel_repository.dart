@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/config/env.dart';
 import '../../../core/constants/roles.dart';
 import '../domain/travel.dart';
+import '../domain/travel_member.dart';
 
 class TravelException implements Exception {
   TravelException(this.message);
@@ -48,7 +49,6 @@ class TravelRepository {
         if (travelJson == null) continue;
         final travelMap = Map<String, dynamic>.from(travelJson as Map);
         final status = travelMap['status'] as String? ?? 'active';
-        // 목록에서는 진행 중 / 완료만 (휴지통은 별도)
         if (status == 'trashed') continue;
 
         list.add(
@@ -155,6 +155,192 @@ class TravelRepository {
     }
   }
 
+  Future<List<TravelMember>> fetchMembers(String travelId) async {
+    final client = _requireClient;
+    final userId = client.auth.currentUser?.id;
+
+    try {
+      final rows = await client
+          .from('travel_members')
+          .select()
+          .eq('travel_id', travelId)
+          .eq('status', 'active')
+          .order('joined_at');
+
+      return (rows as List)
+          .map(
+            (row) => TravelMember.fromJson(
+              Map<String, dynamic>.from(row as Map),
+              currentUserId: userId,
+            ),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('구성원 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<Travel> reissueInviteCode(String travelId) async {
+    final client = _requireClient;
+    try {
+      final result = await client.rpc(
+        'reissue_invite_code',
+        params: {'p_travel_id': travelId},
+      );
+      final map = Map<String, dynamic>.from(result as Map);
+      return Travel.fromJson(map, myRole: TravelRole.owner);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('초대코드 재발급에 실패했습니다.');
+    }
+  }
+
+  Future<void> assignTreasurer({
+    required String travelId,
+    String? memberId,
+  }) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'assign_treasurer',
+        params: {
+          'p_travel_id': travelId,
+          'p_member_id': memberId,
+        },
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('총무 지정에 실패했습니다.');
+    }
+  }
+
+  Future<void> kickMember({
+    required String travelId,
+    required String memberId,
+  }) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'kick_member',
+        params: {
+          'p_travel_id': travelId,
+          'p_member_id': memberId,
+        },
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('구성원 퇴장 처리에 실패했습니다.');
+    }
+  }
+
+  Future<void> leaveTravel(String travelId) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'leave_travel',
+        params: {'p_travel_id': travelId},
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('여행 나가기에 실패했습니다.');
+    }
+  }
+
+  Future<OwnershipTransferRequest?> fetchPendingOwnershipTransfer(
+    String travelId,
+  ) async {
+    final client = _requireClient;
+    try {
+      final row = await client
+          .from('ownership_transfer_requests')
+          .select()
+          .eq('travel_id', travelId)
+          .eq('status', 'pending')
+          .maybeSingle();
+
+      if (row == null) return null;
+      return OwnershipTransferRequest.fromJson(
+        Map<String, dynamic>.from(row),
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('이전 요청을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<OwnershipTransferRequest> requestOwnershipTransfer({
+    required String travelId,
+    required String toMemberId,
+  }) async {
+    final client = _requireClient;
+    try {
+      final result = await client.rpc(
+        'request_ownership_transfer',
+        params: {
+          'p_travel_id': travelId,
+          'p_to_member_id': toMemberId,
+        },
+      );
+      return OwnershipTransferRequest.fromJson(
+        Map<String, dynamic>.from(result as Map),
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('여행장 이전 요청에 실패했습니다.');
+    }
+  }
+
+  Future<void> respondOwnershipTransfer({
+    required String requestId,
+    required bool accept,
+  }) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'respond_ownership_transfer',
+        params: {
+          'p_request_id': requestId,
+          'p_accept': accept,
+        },
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('여행장 이전 응답에 실패했습니다.');
+    }
+  }
+
+  Future<void> cancelOwnershipTransfer(String requestId) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'cancel_ownership_transfer',
+        params: {'p_request_id': requestId},
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('이전 요청 취소에 실패했습니다.');
+    }
+  }
+
   String _dateOnly(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'
@@ -170,6 +356,30 @@ class TravelRepository {
     }
     if (lower.contains('end_date')) {
       return '종료일은 시작일 이후여야 합니다.';
+    }
+    if (lower.contains('only owner')) {
+      return '여행장만 할 수 있는 작업입니다.';
+    }
+    if (lower.contains('owner must transfer')) {
+      return '여행장은 소유권을 이전한 뒤에만 나갈 수 있습니다.';
+    }
+    if (lower.contains('cannot kick owner')) {
+      return '여행장은 퇴장시킬 수 없습니다.';
+    }
+    if (lower.contains('cannot assign owner as treasurer')) {
+      return '여행장을 총무로 지정할 수 없습니다.';
+    }
+    if (lower.contains('member not found')) {
+      return '구성원을 찾을 수 없습니다.';
+    }
+    if (lower.contains('travel is not editable')) {
+      return '완료되었거나 편집할 수 없는 여행입니다.';
+    }
+    if (lower.contains('only target member')) {
+      return '이전 대상 구성원만 응답할 수 있습니다.';
+    }
+    if (lower.contains('request not found')) {
+      return '이전 요청을 찾을 수 없습니다.';
     }
     return raw;
   }

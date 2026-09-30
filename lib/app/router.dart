@@ -10,6 +10,7 @@ import '../features/auth/presentation/providers/auth_providers.dart';
 import '../features/travel/presentation/pages/create_travel_page.dart';
 import '../features/travel/presentation/pages/travel_detail_page.dart';
 import '../features/travel/presentation/pages/travel_list_page.dart';
+import '../features/travel/presentation/pages/travel_members_page.dart';
 
 /// 라우트 경로 상수
 class AppRoutes {
@@ -80,6 +81,16 @@ final goRouterProvider = Provider<GoRouter>((ref) {
               final id = state.pathParameters['travelId']!;
               return TravelDetailPage(travelId: id);
             },
+            routes: [
+              GoRoute(
+                path: 'members',
+                name: 'travelMembers',
+                builder: (context, state) {
+                  final id = state.pathParameters['travelId']!;
+                  return TravelMembersPage(travelId: id);
+                },
+              ),
+            ],
           ),
         ],
       ),

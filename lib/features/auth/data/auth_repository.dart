@@ -33,6 +33,27 @@ class AuthRepository {
     return _client?.auth.currentUser;
   }
 
+  /// 기기에 남은 세션이 서버에서도 유효한지 확인한다.
+  /// Auth 유저가 삭제되었거나 토큰이 무효하면 로컬 로그아웃 후 null.
+  Future<Session?> ensureValidSession() async {
+    if (!Env.isSupabaseReady || _client == null) return null;
+
+    final session = _client.auth.currentSession;
+    if (session == null) return null;
+
+    try {
+      await _client.auth.getUser();
+      return _client.auth.currentSession;
+    } catch (_) {
+      try {
+        await _client.auth.signOut();
+      } catch (_) {
+        // 로컬 세션만 남아 있어도 무시
+      }
+      return null;
+    }
+  }
+
   Stream<AuthState> get onAuthStateChange {
     if (!Env.isSupabaseReady || _client == null) {
       return const Stream.empty();

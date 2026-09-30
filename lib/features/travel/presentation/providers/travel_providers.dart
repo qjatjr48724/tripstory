@@ -5,6 +5,7 @@ import '../../../../core/config/env.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/travel_repository.dart';
 import '../../domain/travel.dart';
+import '../../domain/travel_member.dart';
 
 final travelRepositoryProvider = Provider<TravelRepository>((ref) {
   final client = Env.isSupabaseReady ? Supabase.instance.client : null;
@@ -15,10 +16,27 @@ final travelRepositoryProvider = Provider<TravelRepository>((ref) {
 final myTravelsProvider = FutureProvider.autoDispose<List<Travel>>((ref) async {
   ref.watch(authStateProvider);
   if (!Env.isSupabaseReady) return [];
+
+  final session =
+      await ref.read(authRepositoryProvider).ensureValidSession();
+  if (session == null) return [];
+
   return ref.read(travelRepositoryProvider).fetchMyTravels();
 });
 
 final travelDetailProvider =
     FutureProvider.autoDispose.family<Travel, String>((ref, travelId) async {
   return ref.read(travelRepositoryProvider).fetchTravel(travelId);
+});
+
+final travelMembersProvider = FutureProvider.autoDispose
+    .family<List<TravelMember>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchMembers(travelId);
+});
+
+final pendingOwnershipTransferProvider = FutureProvider.autoDispose
+    .family<OwnershipTransferRequest?, String>((ref, travelId) async {
+  return ref
+      .read(travelRepositoryProvider)
+      .fetchPendingOwnershipTransfer(travelId);
 });
