@@ -1,0 +1,14 @@
+---
+description: Git 브랜치 — 중간은 master, 최종 커밋·푸시는 main
+alwaysApply: true
+---
+
+# Git 브랜치 워크플로
+
+- **일상/중간 커밋**: `master`에 커밋해도 된다. 사용자가 브랜치를 지정하지 않으면 현재 브랜치(보통 `master`)에 커밋한다.
+- **최종 커밋 + 푸시**를 사용자가 요청하면:
+  1. 변경을 커밋한다 (필요 시).
+  2. `main`에 반영한다 (`master` → `main` 병합 또는 `main`에서 커밋).
+  3. **`origin/main`에 푸시**한다. 최종 결과물이 GitHub `main`에 남도록 한다.
+- `main`이 뒤처져 있으면 최종 푸시 전에 `master` 내용을 `main`에 맞춘 뒤 푸시한다.
+- force push to `main`/`master`는 사용자가 명시적으로 요청한 경우에만 한다.
