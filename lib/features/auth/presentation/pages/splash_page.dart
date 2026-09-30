@@ -25,7 +25,9 @@ class _SplashPageState extends ConsumerState<SplashPage> {
     await Future<void>.delayed(const Duration(milliseconds: 700));
     if (!mounted) return;
 
-    final session = ref.read(authRepositoryProvider).currentSession;
+    final session =
+        await ref.read(authRepositoryProvider).ensureValidSession();
+    if (!mounted) return;
     context.go(session != null ? AppRoutes.travels : AppRoutes.login);
   }
 

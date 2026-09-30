@@ -9,6 +9,8 @@
 3. 아래 파일을 **순서대로** 붙여넣고 Run
    1. `migrations/20260927214705_init_schema.sql`
    2. `migrations/20260927214706_travel_rpcs.sql`
+   3. `migrations/20261001013000_member_rpcs.sql` (구성원/권한)
+   4. `migrations/20261001014000_leave_travel_solo_owner.sql` (혼자인 여행장 나가기)
 4. **Table Editor**에서 `profiles`, `travels` 등이 보이면 성공
 
 ## Auth 설정 (3단계 전에)

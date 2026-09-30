@@ -72,7 +72,8 @@ class TravelDetailPage extends ConsumerWidget {
                 Text(travel.memo!),
               ],
               const SizedBox(height: 28),
-              if (travel.inviteCode != null) ...[
+              if (travel.myRole?.canInviteMember == true &&
+                  travel.inviteCode != null) ...[
                 Text(
                   '초대코드',
                   style: Theme.of(context).textTheme.titleMedium,
@@ -124,6 +125,17 @@ class TravelDetailPage extends ConsumerWidget {
                   style: Theme.of(context).textTheme.bodyMedium,
                 ),
               ],
+              const SizedBox(height: 28),
+              ListTile(
+                contentPadding: EdgeInsets.zero,
+                leading: const Icon(Icons.group_outlined),
+                title: const Text('구성원 관리'),
+                subtitle: const Text('역할 · 총무 · 퇴장 · 여행장 이전'),
+                trailing: const Icon(Icons.chevron_right),
+                onTap: () => context.go(
+                  '${AppRoutes.travels}/${travel.id}/members',
+                ),
+              ),
               const SizedBox(height: 40),
               Text(
                 '일정 · 장소 · 비용 등은 다음 단계에서 추가됩니다.',
