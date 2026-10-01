@@ -13,35 +13,87 @@ import '../../data/travel_repository.dart';
 import '../../domain/travel.dart';
 import '../providers/travel_providers.dart';
 
-class TravelListPage extends ConsumerWidget {
+class TravelListPage extends ConsumerStatefulWidget {
   const TravelListPage({super.key});
 
-  Future<void> _signOut(BuildContext context, WidgetRef ref) async {
+  @override
+  ConsumerState<TravelListPage> createState() => _TravelListPageState();
+}
+
+class _TravelListPageState extends ConsumerState<TravelListPage>
+    with RouteAware {
+  bool _routeSubscribed = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _refreshTravels());
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    if (_routeSubscribed) return;
+    final route = ModalRoute.of(context);
+    if (route is PageRoute) {
+      appRouteObserver.subscribe(this, route);
+      _routeSubscribed = true;
+    }
+  }
+
+  @override
+  void dispose() {
+    if (_routeSubscribed) {
+      appRouteObserver.unsubscribe(this);
+    }
+    super.dispose();
+  }
+
+  /// 상세·구성원 화면에서 돌아올 때 (중첩 라우트로 목록 State가 유지됨)
+  @override
+  void didPopNext() => _refreshTravels();
+
+  void _refreshTravels() {
+    if (!mounted) return;
+    ref.invalidate(myTravelsProvider);
+  }
+
+  Future<void> _signOut() async {
     try {
       await ref.read(authRepositoryProvider).signOut();
     } on AppAuthException catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message)),
       );
     }
   }
 
-  Future<void> _joinWithCode(BuildContext context, WidgetRef ref) async {
+  Future<void> _joinWithCode() async {
     final code = await showDialog<String>(
       context: context,
       builder: (context) => const _InviteCodeDialog(),
     );
-    if (code == null || code.isEmpty || !context.mounted) return;
+    if (code == null || code.isEmpty || !mounted) return;
 
     try {
       final travel =
           await ref.read(travelRepositoryProvider).joinByInviteCode(code);
       ref.invalidate(myTravelsProvider);
-      if (!context.mounted) return;
+      if (!mounted) return;
+      final pending = travel.isJoinPending;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            pending
+                ? '참가 요청을 보냈어요. 여행장 승인을 기다려 주세요.'
+                : '여행에 참여했습니다.',
+          ),
+        ),
+      );
       context.go('${AppRoutes.travels}/${travel.id}');
     } on TravelException catch (e) {
-      if (!context.mounted) return;
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(e.message)),
       );
@@ -49,7 +101,7 @@ class TravelListPage extends ConsumerWidget {
   }
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  Widget build(BuildContext context) {
     final asyncTravels = ref.watch(myTravelsProvider);
     final email = ref.watch(authRepositoryProvider).currentUser?.email;
     final dateFormat = DateFormat('MM.dd');
@@ -60,7 +112,7 @@ class TravelListPage extends ConsumerWidget {
         actions: [
           IconButton(
             tooltip: '로그아웃',
-            onPressed: () => _signOut(context, ref),
+            onPressed: _signOut,
             icon: const Icon(Icons.logout),
           ),
         ],
@@ -93,12 +145,15 @@ class TravelListPage extends ConsumerWidget {
             return _EmptyTravels(
               email: email,
               onCreate: () => context.push(AppRoutes.createTravel),
-              onJoin: () => _joinWithCode(context, ref),
+              onJoin: _joinWithCode,
             );
           }
 
           return RefreshIndicator(
-            onRefresh: () async => ref.invalidate(myTravelsProvider),
+            onRefresh: () async {
+              ref.invalidate(myTravelsProvider);
+              await ref.read(myTravelsProvider.future);
+            },
             child: ListView(
               padding: const EdgeInsets.fromLTRB(16, 8, 16, 88),
               children: [
@@ -113,7 +168,7 @@ class TravelListPage extends ConsumerWidget {
                 Align(
                   alignment: Alignment.centerLeft,
                   child: TextButton.icon(
-                    onPressed: () => _joinWithCode(context, ref),
+                    onPressed: _joinWithCode,
                     icon: const Icon(Icons.group_add_outlined, size: 20),
                     label: const Text('초대코드로 참여'),
                   ),
@@ -153,29 +208,18 @@ class _EmptyTravels extends StatelessWidget {
       child: Padding(
         padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+          mainAxisSize: MainAxisSize.min,
           children: [
             if (email != null) ...[
               Text(email!, style: Theme.of(context).textTheme.bodyMedium),
               const SizedBox(height: 16),
             ],
-            Icon(
-              Icons.flight_takeoff,
-              size: 56,
-              color: AppColors.primary.withValues(alpha: 0.7),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              '아직 여행이 없어요',
-              style: Theme.of(context).textTheme.titleLarge,
-            ),
-            const SizedBox(height: 8),
             Text(
               '새 여행을 만들거나\n초대코드로 참여해 보세요',
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.bodyMedium,
             ),
-            const SizedBox(height: 32),
+            const SizedBox(height: 24),
             ElevatedButton.icon(
               onPressed: onCreate,
               icon: const Icon(Icons.add),
@@ -270,7 +314,15 @@ class _TravelCard extends StatelessWidget {
                       style: Theme.of(context).textTheme.titleLarge,
                     ),
                   ),
-                  if (travel.myRole != null)
+                  if (travel.isJoinPending)
+                    Text(
+                      '승인 대기',
+                      style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                            color: AppColors.secondary,
+                            fontWeight: FontWeight.w600,
+                          ),
+                    )
+                  else if (travel.myRole != null)
                     Text(
                       travel.myRole!.label,
                       style: Theme.of(context).textTheme.bodyMedium?.copyWith(

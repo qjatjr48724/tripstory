@@ -70,7 +70,12 @@ class TravelMembersPage extends ConsumerWidget {
             data: (members) {
               final myRole = travel.myRole;
               final pending = transferAsync.asData?.value;
-              final me = members.where((m) => m.isMe).firstOrNull;
+              final activeMembers =
+                  members.where((m) => m.status == MemberStatus.active).toList();
+              final joinRequests = members
+                  .where((m) => m.status == MemberStatus.pending)
+                  .toList();
+              final me = activeMembers.where((m) => m.isMe).firstOrNull;
 
               return RefreshIndicator(
                 onRefresh: () => _refresh(ref),
@@ -80,7 +85,7 @@ class TravelMembersPage extends ConsumerWidget {
                     if (pending != null && me != null)
                       _TransferBanner(
                         request: pending,
-                        members: members,
+                        members: activeMembers,
                         me: me,
                         onAccept: () => _run(
                           context,
@@ -113,12 +118,57 @@ class TravelMembersPage extends ConsumerWidget {
                           successMessage: '이전 요청을 취소했습니다',
                         ),
                       ),
+                    if (myRole == TravelRole.owner &&
+                        joinRequests.isNotEmpty) ...[
+                      Text(
+                        '참가 요청 ${joinRequests.length}',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                      const SizedBox(height: 8),
+                      ...joinRequests.map(
+                        (member) => Card(
+                          child: ListTile(
+                            title: Text(member.displayName),
+                            subtitle: const Text('초대코드로 참가 요청'),
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                TextButton(
+                                  onPressed: () => _run(
+                                    context,
+                                    ref,
+                                    () => ref
+                                        .read(travelRepositoryProvider)
+                                        .rejectTravelJoin(member.id),
+                                    successMessage: '참가 요청을 거절했습니다',
+                                  ),
+                                  child: const Text('거절'),
+                                ),
+                                FilledButton(
+                                  onPressed: () => _run(
+                                    context,
+                                    ref,
+                                    () => ref
+                                        .read(travelRepositoryProvider)
+                                        .acceptTravelJoin(member.id),
+                                    successMessage:
+                                        '${member.displayName}님을 수락했습니다',
+                                  ),
+                                  child: const Text('수락'),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 20),
+                    ],
                     Text(
-                      '구성원 ${members.length}명',
+                      '구성원 ${activeMembers.length}명',
                       style: Theme.of(context).textTheme.titleMedium,
                     ),
                     const SizedBox(height: 8),
-                    ...members.map(
+                    ...activeMembers.map(
                       (member) => _MemberTile(
                         member: member,
                         myRole: myRole,
@@ -174,24 +224,26 @@ class TravelMembersPage extends ConsumerWidget {
                     if (travel.status == TravelStatus.active &&
                         myRole != null &&
                         (myRole != TravelRole.owner ||
-                            members.length == 1)) ...[
+                            activeMembers.length == 1)) ...[
                       const SizedBox(height: 12),
                       TextButton(
                         onPressed: () => _confirmLeave(
                           context,
                           ref,
                           isSoloOwner: myRole == TravelRole.owner &&
-                              members.length == 1,
+                              activeMembers.length == 1,
                         ),
                         child: Text(
-                          myRole == TravelRole.owner && members.length == 1
+                          myRole == TravelRole.owner &&
+                                  activeMembers.length == 1
                               ? '여행 나가기 (삭제)'
                               : '여행 나가기',
                           style: const TextStyle(color: AppColors.error),
                         ),
                       ),
                     ],
-                    if (myRole == TravelRole.owner && members.length > 1) ...[
+                    if (myRole == TravelRole.owner &&
+                        activeMembers.length > 1) ...[
                       const SizedBox(height: 8),
                       Text(
                         '다른 구성원이 있을 때 여행장은 소유권을 이전한 뒤에만 나갈 수 있습니다.',

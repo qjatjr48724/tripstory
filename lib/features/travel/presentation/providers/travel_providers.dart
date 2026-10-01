@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/config/env.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/travel_repository.dart';
+import '../../domain/place.dart';
 import '../../domain/travel.dart';
 import '../../domain/travel_member.dart';
 
@@ -39,4 +40,9 @@ final pendingOwnershipTransferProvider = FutureProvider.autoDispose
   return ref
       .read(travelRepositoryProvider)
       .fetchPendingOwnershipTransfer(travelId);
+});
+
+final travelPlacesProvider =
+    FutureProvider.autoDispose.family<List<Place>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchPlaces(travelId);
 });

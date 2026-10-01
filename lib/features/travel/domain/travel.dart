@@ -1,4 +1,5 @@
 import '../../../core/constants/roles.dart';
+import 'travel_member.dart';
 
 enum TravelStatus {
   active,
@@ -29,6 +30,7 @@ class Travel {
     this.memo,
     this.inviteCode,
     this.myRole,
+    this.myMemberStatus,
   });
 
   final String id;
@@ -40,10 +42,14 @@ class Travel {
   final String? memo;
   final String? inviteCode;
   final TravelRole? myRole;
+  final MemberStatus? myMemberStatus;
+
+  bool get isJoinPending => myMemberStatus == MemberStatus.pending;
 
   factory Travel.fromJson(
     Map<String, dynamic> json, {
     TravelRole? myRole,
+    MemberStatus? myMemberStatus,
   }) {
     return Travel(
       id: json['id'] as String,
@@ -55,10 +61,14 @@ class Travel {
       memo: json['memo'] as String?,
       inviteCode: json['invite_code'] as String?,
       myRole: myRole,
+      myMemberStatus: myMemberStatus,
     );
   }
 
-  Travel copyWith({TravelRole? myRole}) {
+  Travel copyWith({
+    TravelRole? myRole,
+    MemberStatus? myMemberStatus,
+  }) {
     return Travel(
       id: id,
       name: name,
@@ -69,6 +79,7 @@ class Travel {
       memo: memo,
       inviteCode: inviteCode,
       myRole: myRole ?? this.myRole,
+      myMemberStatus: myMemberStatus ?? this.myMemberStatus,
     );
   }
 }

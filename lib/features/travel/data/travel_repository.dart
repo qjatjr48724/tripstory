@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/env.dart';
 import '../../../core/constants/roles.dart';
+import '../domain/place.dart';
 import '../domain/travel.dart';
 import '../domain/travel_member.dart';
 
@@ -26,7 +27,7 @@ class TravelRepository {
     return client;
   }
 
-  /// 내가 active 멤버인 여행 목록
+  /// 내가 active 또는 pending 멤버인 여행 목록
   Future<List<Travel>> fetchMyTravels() async {
     final client = _requireClient;
     final userId = client.auth.currentUser?.id;
@@ -37,9 +38,9 @@ class TravelRepository {
     try {
       final rows = await client
           .from('travel_members')
-          .select('role, travels(*)')
+          .select('role, member_status:status, travels(*)')
           .eq('user_id', userId)
-          .eq('status', 'active')
+          .inFilter('status', ['active', 'pending'])
           .order('joined_at', ascending: false);
 
       final list = <Travel>[];
@@ -48,13 +49,18 @@ class TravelRepository {
         final travelJson = map['travels'];
         if (travelJson == null) continue;
         final travelMap = Map<String, dynamic>.from(travelJson as Map);
-        final status = travelMap['status'] as String? ?? 'active';
-        if (status == 'trashed') continue;
+        final travelStatus = travelMap['status'] as String? ?? 'active';
+        if (travelStatus == 'trashed') continue;
+
+        final memberStatus = map['member_status'] as String? ??
+            map['status'] as String? ??
+            'active';
 
         list.add(
           Travel.fromJson(
             travelMap,
             myRole: TravelRoleX.fromDb(map['role'] as String? ?? 'member'),
+            myMemberStatus: MemberStatus.fromDb(memberStatus),
           ),
         );
       }
@@ -90,7 +96,11 @@ class TravelRepository {
       );
 
       final map = Map<String, dynamic>.from(result as Map);
-      return Travel.fromJson(map, myRole: TravelRole.owner);
+      return Travel.fromJson(
+        map,
+        myRole: TravelRole.owner,
+        myMemberStatus: MemberStatus.active,
+      );
     } on PostgrestException catch (e) {
       throw TravelException(_mapError(e.message));
     } catch (e) {
@@ -99,6 +109,7 @@ class TravelRepository {
     }
   }
 
+  /// 초대코드 참여 결과 (pending이면 승인 대기)
   Future<Travel> joinByInviteCode(String inviteCode) async {
     final client = _requireClient;
     final code = inviteCode.trim();
@@ -112,7 +123,8 @@ class TravelRepository {
         params: {'p_invite_code': code},
       );
       final map = Map<String, dynamic>.from(result as Map);
-      return Travel.fromJson(map, myRole: TravelRole.member);
+      final travelId = map['id'] as String;
+      return fetchTravel(travelId);
     } on PostgrestException catch (e) {
       throw TravelException(_mapError(e.message));
     } catch (e) {
@@ -131,10 +143,10 @@ class TravelRepository {
     try {
       final row = await client
           .from('travel_members')
-          .select('role, travels(*)')
+          .select('role, member_status:status, travels(*)')
           .eq('travel_id', travelId)
           .eq('user_id', userId)
-          .eq('status', 'active')
+          .inFilter('status', ['active', 'pending'])
           .maybeSingle();
 
       if (row == null) {
@@ -143,9 +155,13 @@ class TravelRepository {
 
       final map = Map<String, dynamic>.from(row);
       final travelMap = Map<String, dynamic>.from(map['travels'] as Map);
+      final memberStatus = map['member_status'] as String? ??
+          map['status'] as String? ??
+          'active';
       return Travel.fromJson(
         travelMap,
         myRole: TravelRoleX.fromDb(map['role'] as String? ?? 'member'),
+        myMemberStatus: MemberStatus.fromDb(memberStatus),
       );
     } on PostgrestException catch (e) {
       throw TravelException(_mapError(e.message));
@@ -164,7 +180,7 @@ class TravelRepository {
           .from('travel_members')
           .select()
           .eq('travel_id', travelId)
-          .eq('status', 'active')
+          .inFilter('status', ['active', 'pending'])
           .order('joined_at');
 
       return (rows as List)
@@ -183,6 +199,36 @@ class TravelRepository {
     }
   }
 
+  Future<void> acceptTravelJoin(String memberId) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'accept_travel_join',
+        params: {'p_member_id': memberId},
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('참가 수락에 실패했습니다.');
+    }
+  }
+
+  Future<void> rejectTravelJoin(String memberId) async {
+    final client = _requireClient;
+    try {
+      await client.rpc(
+        'reject_travel_join',
+        params: {'p_member_id': memberId},
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('참가 거절에 실패했습니다.');
+    }
+  }
+
   Future<Travel> reissueInviteCode(String travelId) async {
     final client = _requireClient;
     try {
@@ -191,7 +237,11 @@ class TravelRepository {
         params: {'p_travel_id': travelId},
       );
       final map = Map<String, dynamic>.from(result as Map);
-      return Travel.fromJson(map, myRole: TravelRole.owner);
+      return Travel.fromJson(
+        map,
+        myRole: TravelRole.owner,
+        myMemberStatus: MemberStatus.active,
+      );
     } on PostgrestException catch (e) {
       throw TravelException(_mapError(e.message));
     } catch (e) {
@@ -341,6 +391,175 @@ class TravelRepository {
     }
   }
 
+  Future<String> fetchMyMemberId(String travelId) async {
+    final client = _requireClient;
+    final userId = client.auth.currentUser?.id;
+    if (userId == null) {
+      throw TravelException('로그인이 필요합니다.');
+    }
+
+    try {
+      final row = await client
+          .from('travel_members')
+          .select('id')
+          .eq('travel_id', travelId)
+          .eq('user_id', userId)
+          .eq('status', 'active')
+          .maybeSingle();
+
+      if (row == null) {
+        throw TravelException('이 여행의 구성원이 아닙니다.');
+      }
+      return row['id'] as String;
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('구성원 정보를 불러오지 못했습니다.');
+    }
+  }
+
+  Future<List<Place>> fetchPlaces(String travelId) async {
+    final client = _requireClient;
+    try {
+      final rows = await client
+          .from('places')
+          .select(
+            '*, travel_members(display_name_snapshot, color_hex)',
+          )
+          .eq('travel_id', travelId)
+          .order('created_at', ascending: false);
+
+      return (rows as List)
+          .map((row) => Place.fromJson(Map<String, dynamic>.from(row as Map)))
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('장소 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<Place> createPlace({
+    required String travelId,
+    required String name,
+    String? address,
+    String? countryCode,
+    double? latitude,
+    double? longitude,
+    String? memo,
+    String? googlePlaceId,
+    String? mapsUrl,
+  }) async {
+    final client = _requireClient;
+    final memberId = await fetchMyMemberId(travelId);
+
+    try {
+      final row = await client
+          .from('places')
+          .insert({
+            'travel_id': travelId,
+            'created_by_member_id': memberId,
+            'name': name.trim(),
+            'address': _nullIfEmpty(address),
+            'country_code': _nullIfEmpty(countryCode)?.toUpperCase(),
+            'latitude': latitude,
+            'longitude': longitude,
+            'memo': _nullIfEmpty(memo),
+            'google_place_id': _nullIfEmpty(googlePlaceId),
+            'maps_url': _nullIfEmpty(mapsUrl),
+          })
+          .select(
+            '*, travel_members(display_name_snapshot, color_hex)',
+          )
+          .single();
+
+      return Place.fromJson(Map<String, dynamic>.from(row));
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('장소 등록에 실패했습니다.');
+    }
+  }
+
+  Future<Place> updatePlace({
+    required Place place,
+    required String name,
+    String? address,
+    String? countryCode,
+    double? latitude,
+    double? longitude,
+    String? memo,
+    String? googlePlaceId,
+    String? mapsUrl,
+  }) async {
+    final client = _requireClient;
+    try {
+      final rows = await client
+          .from('places')
+          .update({
+            'name': name.trim(),
+            'address': _nullIfEmpty(address),
+            'country_code': _nullIfEmpty(countryCode)?.toUpperCase(),
+            'latitude': latitude,
+            'longitude': longitude,
+            'memo': _nullIfEmpty(memo),
+            'google_place_id':
+                _nullIfEmpty(googlePlaceId) ?? place.googlePlaceId,
+            'maps_url': _nullIfEmpty(mapsUrl) ?? place.mapsUrl,
+            'version': place.version + 1,
+          })
+          .eq('id', place.id)
+          .eq('version', place.version)
+          .select('*, travel_members(display_name_snapshot, color_hex)');
+
+      final list = rows as List;
+      if (list.isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 최신 내용을 확인한 후 다시 수정해주세요.',
+        );
+      }
+      return Place.fromJson(Map<String, dynamic>.from(list.first as Map));
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('장소 수정에 실패했습니다.');
+    }
+  }
+
+  Future<void> deletePlace(String placeId) async {
+    final client = _requireClient;
+    try {
+      final linked = await client
+          .from('schedules')
+          .select('id')
+          .eq('place_id', placeId)
+          .limit(1);
+
+      if ((linked as List).isNotEmpty) {
+        throw TravelException(
+          '일정에 연결된 장소입니다. 일정에서 연결을 해제한 뒤 삭제해주세요.',
+        );
+      }
+
+      await client.from('places').delete().eq('id', placeId);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('장소 삭제에 실패했습니다.');
+    }
+  }
+
+  String? _nullIfEmpty(String? value) {
+    if (value == null) return null;
+    final trimmed = value.trim();
+    return trimmed.isEmpty ? null : trimmed;
+  }
+
   String _dateOnly(DateTime d) =>
       '${d.year.toString().padLeft(4, '0')}-'
       '${d.month.toString().padLeft(2, '0')}-'
@@ -380,6 +599,13 @@ class TravelRepository {
     }
     if (lower.contains('request not found')) {
       return '이전 요청을 찾을 수 없습니다.';
+    }
+    if (lower.contains('member is not pending')) {
+      return '승인 대기 중인 요청이 아닙니다.';
+    }
+    if (lower.contains('only owner can accept') ||
+        lower.contains('only owner can reject')) {
+      return '여행장만 할 수 있는 작업입니다.';
     }
     return raw;
   }

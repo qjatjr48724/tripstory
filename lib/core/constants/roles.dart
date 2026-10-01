@@ -63,6 +63,9 @@ extension TravelRoleX on TravelRole {
   /// 구성원 초대
   bool get canInviteMember => this == TravelRole.owner;
 
+  /// 초대코드 보기 (active 구성원 전원)
+  bool get canViewInviteCode => true;
+
   /// 강제 퇴장
   bool get canKickMember => this == TravelRole.owner;
 
