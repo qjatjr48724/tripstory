@@ -1,12 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../../../app/router.dart';
 import '../../../../core/constants/app_constants.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/auth_repository.dart';
 import '../providers/auth_providers.dart';
+
+const _kRememberEmail = 'login_remember_email';
+const _kSavedEmail = 'login_saved_email';
 
 class LoginPage extends ConsumerStatefulWidget {
   const LoginPage({super.key});
@@ -21,6 +25,42 @@ class _LoginPageState extends ConsumerState<LoginPage> {
   final _passwordController = TextEditingController();
   bool _obscure = true;
   bool _loading = false;
+  bool _rememberEmail = false;
+  bool _prefsLoaded = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedEmail();
+  }
+
+  Future<void> _loadSavedEmail() async {
+    final prefs = await SharedPreferences.getInstance();
+    final remember = prefs.getBool(_kRememberEmail) ?? false;
+    final email = prefs.getString(_kSavedEmail) ?? '';
+    if (!mounted) return;
+    setState(() {
+      _rememberEmail = remember;
+      if (remember && email.isNotEmpty) {
+        _emailController.text = email;
+      }
+      _prefsLoaded = true;
+    });
+  }
+
+  Future<void> _persistEmailPreference() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (_rememberEmail) {
+      await prefs.setBool(_kRememberEmail, true);
+      await prefs.setString(
+        _kSavedEmail,
+        _emailController.text.trim(),
+      );
+    } else {
+      await prefs.setBool(_kRememberEmail, false);
+      await prefs.remove(_kSavedEmail);
+    }
+  }
 
   @override
   void dispose() {
@@ -38,6 +78,7 @@ class _LoginPageState extends ConsumerState<LoginPage> {
             email: _emailController.text,
             password: _passwordController.text,
           );
+      await _persistEmailPreference();
       if (!mounted) return;
       context.go(AppRoutes.travels);
     } on AppAuthException catch (e) {
@@ -116,7 +157,19 @@ class _LoginPageState extends ConsumerState<LoginPage> {
                     return null;
                   },
                 ),
-                const SizedBox(height: 24),
+                const SizedBox(height: 4),
+                if (_prefsLoaded)
+                  CheckboxListTile(
+                    value: _rememberEmail,
+                    onChanged: _loading
+                        ? null
+                        : (v) => setState(() => _rememberEmail = v ?? false),
+                    controlAffinity: ListTileControlAffinity.leading,
+                    contentPadding: EdgeInsets.zero,
+                    dense: true,
+                    title: const Text('이메일 저장'),
+                  ),
+                const SizedBox(height: 16),
                 ElevatedButton(
                   onPressed: _loading ? null : _signIn,
                   child: _loading

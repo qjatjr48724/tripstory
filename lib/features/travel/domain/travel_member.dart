@@ -2,10 +2,12 @@ import '../../../core/constants/roles.dart';
 
 enum MemberStatus {
   active,
+  pending,
   left,
   kicked;
 
   static MemberStatus fromDb(String value) => switch (value) {
+        'pending' => MemberStatus.pending,
         'left' => MemberStatus.left,
         'kicked' => MemberStatus.kicked,
         _ => MemberStatus.active,
@@ -13,8 +15,16 @@ enum MemberStatus {
 
   String get dbValue => switch (this) {
         MemberStatus.active => 'active',
+        MemberStatus.pending => 'pending',
         MemberStatus.left => 'left',
         MemberStatus.kicked => 'kicked',
+      };
+
+  String get label => switch (this) {
+        MemberStatus.active => '참가 중',
+        MemberStatus.pending => '승인 대기',
+        MemberStatus.left => '나감',
+        MemberStatus.kicked => '퇴장',
       };
 }
 

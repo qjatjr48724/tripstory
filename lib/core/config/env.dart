@@ -19,6 +19,19 @@ class Env {
 
   static String get supabaseAnonKey => _read('SUPABASE_ANON_KEY');
 
+  /// Google Places API (New) 키 — 해외 장소 검색
+  static String get googlePlacesApiKey => _read('GOOGLE_PLACES_API_KEY');
+
+  static bool get isGooglePlacesConfigured => googlePlacesApiKey.isNotEmpty;
+
+  /// 네이버 검색 API (지역) — 국내 장소 검색
+  static String get naverClientId => _read('NAVER_CLIENT_ID');
+
+  static String get naverClientSecret => _read('NAVER_CLIENT_SECRET');
+
+  static bool get isNaverSearchConfigured =>
+      naverClientId.isNotEmpty && naverClientSecret.isNotEmpty;
+
   static bool get isSupabaseConfigured =>
       supabaseUrl.isNotEmpty && supabaseAnonKey.isNotEmpty;
 
