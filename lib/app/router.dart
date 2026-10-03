@@ -7,12 +7,15 @@ import '../features/auth/presentation/pages/login_page.dart';
 import '../features/auth/presentation/pages/signup_page.dart';
 import '../features/auth/presentation/pages/splash_page.dart';
 import '../features/auth/presentation/providers/auth_providers.dart';
+import '../features/travel/domain/expense.dart';
 import '../features/travel/domain/place.dart';
 import '../features/travel/domain/schedule.dart';
 import '../features/travel/presentation/pages/create_travel_page.dart';
+import '../features/travel/presentation/pages/expense_form_page.dart';
 import '../features/travel/presentation/pages/place_form_page.dart';
 import '../features/travel/presentation/pages/schedule_form_page.dart';
 import '../features/travel/presentation/pages/travel_detail_page.dart';
+import '../features/travel/presentation/pages/travel_expenses_page.dart';
 import '../features/travel/presentation/pages/travel_list_page.dart';
 import '../features/travel/presentation/pages/travel_members_page.dart';
 import '../features/travel/presentation/pages/travel_places_page.dart';
@@ -189,6 +192,44 @@ final List<RouteBase> _appRoutes = [
                   return ScheduleFormPage(
                     travelId: id,
                     schedule: schedule,
+                  );
+                },
+              ),
+            ],
+          ),
+          GoRoute(
+            path: 'expenses',
+            name: 'travelExpenses',
+            builder: (context, state) {
+              final id = state.pathParameters['travelId']!;
+              return TravelExpensesPage(travelId: id);
+            },
+            routes: [
+              GoRoute(
+                path: 'new',
+                name: 'expenseCreate',
+                builder: (context, state) {
+                  final id = state.pathParameters['travelId']!;
+                  return ExpenseFormPage(travelId: id);
+                },
+              ),
+              GoRoute(
+                path: ':expenseId/edit',
+                name: 'expenseEdit',
+                builder: (context, state) {
+                  final id = state.pathParameters['travelId']!;
+                  final expense = state.extra;
+                  if (expense is! Expense) {
+                    return Scaffold(
+                      appBar: AppBar(),
+                      body: const Center(
+                        child: Text('비용 정보를 불러오지 못했습니다.'),
+                      ),
+                    );
+                  }
+                  return ExpenseFormPage(
+                    travelId: id,
+                    expense: expense,
                   );
                 },
               ),

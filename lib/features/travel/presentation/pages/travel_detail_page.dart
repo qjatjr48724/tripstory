@@ -193,9 +193,19 @@ class TravelDetailPage extends ConsumerWidget {
                       '${AppRoutes.travels}/${travel.id}/schedules',
                     ),
                   ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.receipt_long_outlined),
+                    title: const Text('비용'),
+                    subtitle: const Text('지출 기록 · 분담 · 통화'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push(
+                      '${AppRoutes.travels}/${travel.id}/expenses',
+                    ),
+                  ),
                   const SizedBox(height: 40),
                   Text(
-                    '비용 · 정산 등은 다음 단계에서 추가됩니다.',
+                    '정산 · 총무 확정 흐름은 다음 단계에서 추가됩니다.',
                     style: Theme.of(context).textTheme.bodyMedium,
                     textAlign: TextAlign.center,
                   ),
