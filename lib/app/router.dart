@@ -20,6 +20,7 @@ import '../features/travel/presentation/pages/travel_list_page.dart';
 import '../features/travel/presentation/pages/travel_members_page.dart';
 import '../features/travel/presentation/pages/travel_places_page.dart';
 import '../features/travel/presentation/pages/travel_schedules_page.dart';
+import '../features/travel/presentation/pages/travel_settlements_page.dart';
 
 /// 라우트 경로 상수
 class AppRoutes {
@@ -234,6 +235,14 @@ final List<RouteBase> _appRoutes = [
                 },
               ),
             ],
+          ),
+          GoRoute(
+            path: 'settlements',
+            name: 'travelSettlements',
+            builder: (context, state) {
+              final id = state.pathParameters['travelId']!;
+              return TravelSettlementsPage(travelId: id);
+            },
           ),
         ],
       ),

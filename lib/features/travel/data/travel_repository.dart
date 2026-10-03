@@ -5,6 +5,7 @@ import '../../../core/constants/roles.dart';
 import '../domain/expense.dart';
 import '../domain/place.dart';
 import '../domain/schedule.dart';
+import '../domain/settlement.dart';
 import '../domain/travel.dart';
 import '../domain/travel_member.dart';
 
@@ -1023,6 +1024,204 @@ class TravelRepository {
     } catch (e) {
       if (e is TravelException) rethrow;
       throw TravelException('비용 삭제에 실패했습니다.');
+    }
+  }
+
+  Future<List<Settlement>> fetchSettlements(String travelId) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final rows = await client
+          .from('settlements')
+          .select()
+          .eq('travel_id', travelId)
+          .order('created_at');
+
+      return (rows as List)
+          .map(
+            (row) => Settlement.fromJson(
+              Map<String, dynamic>.from(row as Map),
+              membersById: membersById,
+            ),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('정산 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  /// 미확인 송금 행을 지우고, 진행 중 비용 기준으로 송금 목록을 다시 만든다.
+  Future<List<Settlement>> syncSettlementsFromExpenses(String travelId) async {
+    final client = _requireClient;
+    try {
+      final expenses = await fetchExpenses(travelId);
+      final membersById = await _membersById(travelId);
+      final plan = buildSettlementPlan(
+        expenses: expenses,
+        membersById: membersById,
+      );
+
+      if (plan.openExpenseCount == 0) {
+        throw TravelException('정산할 진행 중 비용이 없습니다.');
+      }
+      if (plan.transfers.isEmpty) {
+        throw TravelException(
+          '송금이 필요한 금액이 없습니다. 미배분 잔액이 있으면 비용에서 먼저 나눠 주세요.',
+        );
+      }
+
+      final existing = await fetchSettlements(travelId);
+      final locked = existing.where((s) => s.sentConfirmed || s.receivedConfirmed);
+      if (locked.isNotEmpty) {
+        throw TravelException(
+          '이미 확인이 시작된 송금이 있어 목록을 다시 만들 수 없습니다. '
+          '확인을 모두 끝낸 뒤 정산 완료 처리하세요.',
+        );
+      }
+
+      if (existing.isNotEmpty) {
+        await client.from('settlements').delete().eq('travel_id', travelId);
+      }
+
+      await client.from('settlements').insert(
+            plan.transfers
+                .map(
+                  (t) => {
+                    'travel_id': travelId,
+                    'from_member_id': t.fromMemberId,
+                    'to_member_id': t.toMemberId,
+                    'amount': t.amount,
+                    'currency': t.currency,
+                  },
+                )
+                .toList(),
+          );
+
+      return fetchSettlements(travelId);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('송금 목록 만들기에 실패했습니다.');
+    }
+  }
+
+  Future<Settlement> confirmSettlementSent({
+    required Settlement settlement,
+    String? proxyMemberId,
+  }) async {
+    final client = _requireClient;
+    if (settlement.sentConfirmed) {
+      throw TravelException('이미 송금 확인된 항목입니다.');
+    }
+    try {
+      final rows = await client
+          .from('settlements')
+          .update({
+            'sent_confirmed': true,
+            'sent_at': DateTime.now().toUtc().toIso8601String(),
+            'sent_by_proxy_member_id': ?proxyMemberId,
+            'version': settlement.version + 1,
+          })
+          .eq('id', settlement.id)
+          .eq('version', settlement.version)
+          .select();
+
+      if ((rows as List).isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 다시 불러온 후 시도해주세요.',
+        );
+      }
+      final membersById = await _membersById(settlement.travelId);
+      return Settlement.fromJson(
+        Map<String, dynamic>.from(rows.first as Map),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('송금 확인에 실패했습니다.');
+    }
+  }
+
+  Future<Settlement> confirmSettlementReceived({
+    required Settlement settlement,
+    String? proxyMemberId,
+  }) async {
+    final client = _requireClient;
+    if (settlement.receivedConfirmed) {
+      throw TravelException('이미 수령 확인된 항목입니다.');
+    }
+    if (!settlement.sentConfirmed) {
+      throw TravelException('송금 확인이 먼저 필요합니다.');
+    }
+    try {
+      final rows = await client
+          .from('settlements')
+          .update({
+            'received_confirmed': true,
+            'received_at': DateTime.now().toUtc().toIso8601String(),
+            'received_by_proxy_member_id': ?proxyMemberId,
+            'version': settlement.version + 1,
+          })
+          .eq('id', settlement.id)
+          .eq('version', settlement.version)
+          .select();
+
+      if ((rows as List).isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 다시 불러온 후 시도해주세요.',
+        );
+      }
+      final membersById = await _membersById(settlement.travelId);
+      return Settlement.fromJson(
+        Map<String, dynamic>.from(rows.first as Map),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('수령 확인에 실패했습니다.');
+    }
+  }
+
+  /// 모든 송금이 송금·수령 확인되면 진행 중 비용을 정산 완료로 잠근다.
+  Future<int> completeOpenExpenseSettlements(String travelId) async {
+    final client = _requireClient;
+    try {
+      final settlements = await fetchSettlements(travelId);
+      if (settlements.isEmpty) {
+        throw TravelException('송금 목록이 없습니다. 먼저 송금 목록을 만드세요.');
+      }
+      if (!settlements.every((s) => s.isFullyConfirmed)) {
+        throw TravelException('아직 확인되지 않은 송금이 있습니다.');
+      }
+
+      final expenses = await fetchExpenses(travelId);
+      final openIds = expenses
+          .where((e) => !e.excludeFromSettlement && !e.isSettlementCompleted)
+          .map((e) => e.id)
+          .toList();
+      if (openIds.isEmpty) {
+        throw TravelException('완료 처리할 비용이 없습니다.');
+      }
+
+      await client
+          .from('expenses')
+          .update({'settlement_status': 'completed'})
+          .inFilter('id', openIds);
+
+      return openIds.length;
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('정산 완료 처리에 실패했습니다.');
     }
   }
 
