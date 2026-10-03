@@ -3,6 +3,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/config/env.dart';
 import '../../../core/constants/roles.dart';
 import '../domain/place.dart';
+import '../domain/schedule.dart';
 import '../domain/travel.dart';
 import '../domain/travel_member.dart';
 
@@ -508,7 +509,7 @@ class TravelRepository {
             'memo': _nullIfEmpty(memo),
             'google_place_id':
                 _nullIfEmpty(googlePlaceId) ?? place.googlePlaceId,
-            'maps_url': _nullIfEmpty(mapsUrl) ?? place.mapsUrl,
+            'maps_url': _nullIfEmpty(mapsUrl),
             'version': place.version + 1,
           })
           .eq('id', place.id)
@@ -545,12 +546,251 @@ class TravelRepository {
         );
       }
 
+      final planBLinked = await client
+          .from('plan_b')
+          .select('id')
+          .eq('place_id', placeId)
+          .limit(1);
+      if ((planBLinked as List).isNotEmpty) {
+        throw TravelException(
+          'Plan B에 연결된 장소입니다. Plan B에서 해제한 뒤 삭제해주세요.',
+        );
+      }
+
       await client.from('places').delete().eq('id', placeId);
     } on PostgrestException catch (e) {
       throw TravelException(_mapError(e.message));
     } catch (e) {
       if (e is TravelException) rethrow;
       throw TravelException('장소 삭제에 실패했습니다.');
+    }
+  }
+
+  static const _scheduleSelect =
+      '*, places(*), plan_b(*, places(*))';
+
+  Future<List<ScheduleItem>> fetchSchedules(String travelId) async {
+    final client = _requireClient;
+    try {
+      final rows = await client
+          .from('schedules')
+          .select(_scheduleSelect)
+          .eq('travel_id', travelId)
+          .order('schedule_date')
+          .order('sort_order');
+
+      return (rows as List)
+          .map(
+            (row) =>
+                ScheduleItem.fromJson(Map<String, dynamic>.from(row as Map)),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('일정 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<ScheduleItem> createSchedule({
+    required String travelId,
+    required DateTime scheduleDate,
+    required String title,
+    String? placeId,
+    Duration? startTime,
+    String? memo,
+  }) async {
+    final client = _requireClient;
+    try {
+      final dateStr = _dateOnly(scheduleDate);
+      final existing = await client
+          .from('schedules')
+          .select('sort_order')
+          .eq('travel_id', travelId)
+          .eq('schedule_date', dateStr)
+          .order('sort_order', ascending: false)
+          .limit(1);
+
+      var nextOrder = 0;
+      if ((existing as List).isNotEmpty) {
+        nextOrder =
+            ((existing.first as Map)['sort_order'] as int? ?? 0) + 1;
+      }
+
+      final row = await client
+          .from('schedules')
+          .insert({
+            'travel_id': travelId,
+            'schedule_date': dateStr,
+            'title': title.trim(),
+            'place_id': placeId,
+            'start_time': ScheduleItem.formatTimeForDb(startTime),
+            'memo': _nullIfEmpty(memo),
+            'sort_order': nextOrder,
+          })
+          .select(_scheduleSelect)
+          .single();
+
+      return ScheduleItem.fromJson(Map<String, dynamic>.from(row));
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('일정 등록에 실패했습니다.');
+    }
+  }
+
+  Future<ScheduleItem> updateSchedule({
+    required ScheduleItem schedule,
+    required DateTime scheduleDate,
+    required String title,
+    String? placeId,
+    Duration? startTime,
+    String? memo,
+  }) async {
+    final client = _requireClient;
+    try {
+      final rows = await client
+          .from('schedules')
+          .update({
+            'schedule_date': _dateOnly(scheduleDate),
+            'title': title.trim(),
+            'place_id': placeId,
+            'start_time': ScheduleItem.formatTimeForDb(startTime),
+            'memo': _nullIfEmpty(memo),
+            'version': schedule.version + 1,
+          })
+          .eq('id', schedule.id)
+          .eq('version', schedule.version)
+          .select(_scheduleSelect);
+
+      final list = rows as List;
+      if (list.isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 최신 내용을 확인한 후 다시 수정해주세요.',
+        );
+      }
+      return ScheduleItem.fromJson(Map<String, dynamic>.from(list.first as Map));
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('일정 수정에 실패했습니다.');
+    }
+  }
+
+  Future<ScheduleItem> setScheduleVisited({
+    required ScheduleItem schedule,
+    required bool isVisited,
+  }) async {
+    final client = _requireClient;
+    try {
+      final rows = await client
+          .from('schedules')
+          .update({
+            'is_visited': isVisited,
+            'version': schedule.version + 1,
+          })
+          .eq('id', schedule.id)
+          .eq('version', schedule.version)
+          .select(_scheduleSelect);
+
+      final list = rows as List;
+      if (list.isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 최신 내용을 확인한 후 다시 시도해주세요.',
+        );
+      }
+      return ScheduleItem.fromJson(Map<String, dynamic>.from(list.first as Map));
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('방문 상태 변경에 실패했습니다.');
+    }
+  }
+
+  /// 같은 날짜 안 순서만 변경. start_time은 건드리지 않는다.
+  Future<void> reorderSchedules({
+    required String travelId,
+    required DateTime scheduleDate,
+    required List<String> orderedIds,
+  }) async {
+    final client = _requireClient;
+    try {
+      final dateStr = _dateOnly(scheduleDate);
+      for (var i = 0; i < orderedIds.length; i++) {
+        await client
+            .from('schedules')
+            .update({'sort_order': i})
+            .eq('id', orderedIds[i])
+            .eq('travel_id', travelId)
+            .eq('schedule_date', dateStr);
+      }
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('일정 순서 변경에 실패했습니다.');
+    }
+  }
+
+  Future<void> deleteSchedule(String scheduleId) async {
+    final client = _requireClient;
+    try {
+      await client.from('schedules').delete().eq('id', scheduleId);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('일정 삭제에 실패했습니다.');
+    }
+  }
+
+  /// slot 1 또는 2. placeId가 null이면 해당 슬롯 삭제.
+  Future<void> setPlanBSlot({
+    required String scheduleId,
+    required int slot,
+    String? placeId,
+  }) async {
+    if (slot != 1 && slot != 2) {
+      throw TravelException('Plan B는 1·2번 슬롯만 사용할 수 있습니다.');
+    }
+    final client = _requireClient;
+    try {
+      if (placeId == null) {
+        await client
+            .from('plan_b')
+            .delete()
+            .eq('schedule_id', scheduleId)
+            .eq('slot', slot);
+        return;
+      }
+
+      final existing = await client
+          .from('plan_b')
+          .select('id')
+          .eq('schedule_id', scheduleId)
+          .eq('slot', slot)
+          .maybeSingle();
+
+      if (existing == null) {
+        await client.from('plan_b').insert({
+          'schedule_id': scheduleId,
+          'place_id': placeId,
+          'slot': slot,
+        });
+      } else {
+        await client.from('plan_b').update({
+          'place_id': placeId,
+        }).eq('id', existing['id'] as String);
+      }
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('Plan B 저장에 실패했습니다.');
     }
   }
 
@@ -610,3 +850,4 @@ class TravelRepository {
     return raw;
   }
 }
+

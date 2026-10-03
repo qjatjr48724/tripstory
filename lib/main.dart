@@ -22,6 +22,12 @@ Future<void> main() async {
     );
   }
 
+  if (kDebugMode) {
+    debugPrint(
+      '[tripstory] Naver 지역검색: ${Env.isNaverSearchConfigured ? "키 로드됨" : "키 없음 — .env 수정 후 flutter run 재실행"}',
+    );
+  }
+
   runApp(
     const ProviderScope(
       child: TripStoryApp(),

@@ -91,17 +91,18 @@ class _PlaceSearchPageState extends ConsumerState<PlaceSearchPage> {
   }
 
   void _onControllerChanged() {
-    final value = _controller.value;
-    if (value.isComposingRangeValid) {
-      _debounce?.cancel();
-      return;
-    }
-    _scheduleSearch(value.text);
+    // 한글 조합 중이어도 현재 텍스트로 검색한다.
+    // (스페이스로 확정할 때까지 기다리지 않음)
+    _scheduleSearch(_controller.text);
   }
 
   void _scheduleSearch(String text) {
     _debounce?.cancel();
-    _debounce = Timer(const Duration(milliseconds: 400), () {
+    // 조합 중에는 조금 더 기다려 중간 글자 과다 호출을 줄인다
+    final delay = _controller.value.isComposingRangeValid
+        ? const Duration(milliseconds: 550)
+        : const Duration(milliseconds: 350);
+    _debounce = Timer(delay, () {
       _search(text);
     });
   }
@@ -113,6 +114,10 @@ class _PlaceSearchPageState extends ConsumerState<PlaceSearchPage> {
       return;
     }
 
+    // 디바운스 사이에 입력이 더 바뀌었으면 최신 텍스트로 맞춤
+    final latest = _controller.text.trim();
+    final effectiveQuery = latest.length >= 2 ? latest : query;
+
     _ui.value = _SearchUi(
       loading: true,
       hint: '검색 중…',
@@ -123,20 +128,19 @@ class _PlaceSearchPageState extends ConsumerState<PlaceSearchPage> {
     try {
       if (_isKorea) {
         final results =
-            await ref.read(naverLocalClientProvider).search(query);
+            await ref.read(naverLocalClientProvider).search(effectiveQuery);
         if (!mounted) return;
-        if (_controller.value.isComposingRangeValid) return;
-        if (_controller.text.trim() != query) return;
+        if (_controller.text.trim() != effectiveQuery) return;
         _ui.value = _SearchUi(
           naverResults: results,
           hint: results.isEmpty ? '검색 결과가 없습니다' : '',
         );
       } else {
-        final results =
-            await ref.read(googlePlacesClientProvider).autocomplete(query);
+        final results = await ref
+            .read(googlePlacesClientProvider)
+            .autocomplete(effectiveQuery);
         if (!mounted) return;
-        if (_controller.value.isComposingRangeValid) return;
-        if (_controller.text.trim() != query) return;
+        if (_controller.text.trim() != effectiveQuery) return;
         _ui.value = _SearchUi(
           googleSuggestions: results,
           hint: results.isEmpty ? '검색 결과가 없습니다' : '',
@@ -144,11 +148,9 @@ class _PlaceSearchPageState extends ConsumerState<PlaceSearchPage> {
       }
     } on PlaceSearchException catch (e) {
       if (!mounted) return;
-      if (_controller.value.isComposingRangeValid) return;
       _ui.value = _SearchUi(error: e.message, hint: '검색 결과가 없습니다');
     } catch (_) {
       if (!mounted) return;
-      if (_controller.value.isComposingRangeValid) return;
       _ui.value = const _SearchUi(
         error: '장소 검색 중 오류가 발생했습니다.',
         hint: '검색 결과가 없습니다',
@@ -238,9 +240,11 @@ class _PlaceSearchPageState extends ConsumerState<PlaceSearchPage> {
                         Text(
                           _isKorea
                               ? '.env에 NAVER_CLIENT_ID / NAVER_CLIENT_SECRET을\n'
-                                  '넣은 뒤 앱을 다시 시작해 주세요.\n\n'
+                                  '넣은 뒤 앱을 완전히 다시 실행해 주세요.\n'
+                                  '(핫 리로드 r/R만으로는 .env가 반영되지 않습니다)\n\n'
+                                  '터미널에서 flutter run 을 다시 실행하세요.\n\n'
                                   '네이버 클라우드 → NAVER API HUB에서\n'
-                                  '「지역」검색 API를 등록하세요.'
+                                  '「지역」검색 API를 등록했는지 확인하세요.'
                               : '.env에 GOOGLE_PLACES_API_KEY를 넣은 뒤\n'
                                   '앱을 다시 시작해 주세요.\n\n'
                                   'Google Cloud에서 Places API (New)를 활성화해야 합니다.',

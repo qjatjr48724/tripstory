@@ -5,6 +5,7 @@ import '../../../../core/config/env.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/travel_repository.dart';
 import '../../domain/place.dart';
+import '../../domain/schedule.dart';
 import '../../domain/travel.dart';
 import '../../domain/travel_member.dart';
 
@@ -45,4 +46,9 @@ final pendingOwnershipTransferProvider = FutureProvider.autoDispose
 final travelPlacesProvider =
     FutureProvider.autoDispose.family<List<Place>, String>((ref, travelId) async {
   return ref.read(travelRepositoryProvider).fetchPlaces(travelId);
+});
+
+final travelSchedulesProvider = FutureProvider.autoDispose
+    .family<List<ScheduleItem>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchSchedules(travelId);
 });
