@@ -32,12 +32,18 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
   late final TextEditingController _addressController;
   late final TextEditingController _countryController;
   late final TextEditingController _memoController;
+  late final TextEditingController _naverLinkController;
   double? _latitude;
   double? _longitude;
   String? _googlePlaceId;
   String? _mapsUrl;
   bool _loading = false;
   bool _pickedFromMap = false;
+
+  bool get _isKorea {
+    final code = _countryController.text.trim().toUpperCase();
+    return code == 'KR' || code == 'KOR';
+  }
 
   @override
   void initState() {
@@ -47,6 +53,16 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
     _addressController = TextEditingController(text: p?.address ?? '');
     _countryController = TextEditingController(text: p?.countryCode ?? '');
     _memoController = TextEditingController(text: p?.memo ?? '');
+    final existingMaps = p?.mapsUrl ?? '';
+    // 국내: maps_url을 플레이스 링크(B)로 사용. 핀 URL은 저장하지 않음.
+    _naverLinkController = TextEditingController(
+      text: (p != null &&
+              ((p.countryCode ?? '').toUpperCase() == 'KR' ||
+                  (p.countryCode ?? '').toUpperCase() == 'KOR') &&
+              existingMaps.isNotEmpty)
+          ? existingMaps
+          : '',
+    );
     _latitude = p?.latitude;
     _longitude = p?.longitude;
     _googlePlaceId = p?.googlePlaceId;
@@ -60,6 +76,7 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
     _addressController.dispose();
     _countryController.dispose();
     _memoController.dispose();
+    _naverLinkController.dispose();
     super.dispose();
   }
 
@@ -78,7 +95,13 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
       _latitude = result.latitude;
       _longitude = result.longitude;
       _googlePlaceId = result.googlePlaceId;
-      _mapsUrl = result.mapsUrl;
+      if (region == PlaceSearchRegion.korea) {
+        // A는 좌표로 열고, B는 사용자가 따로 붙여넣음
+        _mapsUrl = null;
+        _naverLinkController.clear();
+      } else {
+        _mapsUrl = result.mapsUrl;
+      }
       _pickedFromMap = true;
     });
   }
@@ -143,6 +166,12 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
     setState(() => _loading = true);
     try {
       final repo = ref.read(travelRepositoryProvider);
+      final mapsUrl = _isKorea
+          ? (_naverLinkController.text.trim().isEmpty
+              ? null
+              : _naverLinkController.text.trim())
+          : _mapsUrl;
+
       if (widget.isEditing) {
         await repo.updatePlace(
           place: widget.place!,
@@ -153,7 +182,7 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
           longitude: _longitude,
           memo: _memoController.text,
           googlePlaceId: _googlePlaceId,
-          mapsUrl: _mapsUrl,
+          mapsUrl: mapsUrl,
         );
         ref.invalidate(travelPlacesProvider(widget.travelId));
         if (!mounted) return;
@@ -171,7 +200,7 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
           longitude: _longitude,
           memo: _memoController.text,
           googlePlaceId: _googlePlaceId,
-          mapsUrl: _mapsUrl,
+          mapsUrl: mapsUrl,
         );
         ref.invalidate(travelPlacesProvider(widget.travelId));
         if (!mounted) return;
@@ -310,6 +339,21 @@ class _PlaceFormPageState extends ConsumerState<PlaceFormPage> {
                     '좌표: ${_latitude!.toStringAsFixed(5)}, '
                     '${_longitude!.toStringAsFixed(5)}',
                     style: Theme.of(context).textTheme.bodyMedium,
+                  ),
+                ],
+                if (_isKorea) ...[
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: _naverLinkController,
+                    keyboardType: TextInputType.url,
+                    decoration: const InputDecoration(
+                      labelText: '네이버 지도 링크 (선택)',
+                      hintText: 'map.naver.com/.../place/숫자',
+                      helperText:
+                          '지도에서 보기는 좌표로 네이버 지도 앱을 엽니다.\n'
+                          '리뷰·사진 상세가 필요할 때만 공유 링크를 붙여넣으세요.',
+                      helperMaxLines: 3,
+                    ),
                   ),
                 ],
                 const SizedBox(height: 12),

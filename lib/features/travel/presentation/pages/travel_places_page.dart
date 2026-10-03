@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -7,6 +8,7 @@ import '../../../../app/router.dart';
 import '../../../../core/constants/roles.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../../../core/utils/country_flag.dart';
+import '../../data/naver_local_client.dart';
 import '../../data/travel_repository.dart';
 import '../../domain/place.dart';
 import '../../domain/travel.dart';
@@ -50,33 +52,82 @@ class _TravelPlacesPageState extends ConsumerState<TravelPlacesPage> {
   }
 
   Future<void> _openMap(Place place) async {
-    if (!place.canOpenMap) return;
+    if (!place.canOpenMap && !isNaverPlaceDetailUrl(place.mapsUrl)) return;
+
+    // 국내: 네이버 지도 앱에 좌표+이름 마커 (붙여넣기 없음)
+    if (place.isKorea) {
+      if (!place.hasCoordinates) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('좌표가 없어 지도를 열 수 없습니다')),
+        );
+        return;
+      }
+
+      final appUri = naverMapAppPlaceUri(
+        name: place.name,
+        latitude: place.latitude,
+        longitude: place.longitude,
+      );
+      if (appUri != null && await canLaunchUrl(appUri)) {
+        await launchUrl(appUri, mode: LaunchMode.externalApplication);
+        return;
+      }
+
+      // Android: 앱 없으면 스토어로
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        final intentUri = naverMapAndroidIntentUri(
+          name: place.name,
+          latitude: place.latitude,
+          longitude: place.longitude,
+        );
+        if (intentUri != null && await canLaunchUrl(intentUri)) {
+          await launchUrl(intentUri, mode: LaunchMode.externalApplication);
+          return;
+        }
+      }
+
+      // 웹 폴백
+      final web = naverPlacePinUrl(
+        name: place.name,
+        latitude: place.latitude,
+        longitude: place.longitude,
+      );
+      if (web == null) return;
+      await launchUrl(
+        Uri.parse(web),
+        mode: LaunchMode.externalApplication,
+      );
+      return;
+    }
 
     final Uri uri;
-    final mapsUrl = place.mapsUrl?.trim();
-    if (mapsUrl != null && mapsUrl.isNotEmpty) {
-      uri = Uri.parse(mapsUrl);
-    } else if (place.googlePlaceId != null &&
-        place.googlePlaceId!.isNotEmpty) {
+    if (place.googlePlaceId != null && place.googlePlaceId!.isNotEmpty) {
       uri = Uri.parse(
         'https://www.google.com/maps/search/?api=1'
         '&query=place_id:${place.googlePlaceId}',
       );
-    } else if (place.isKorea && place.hasCoordinates) {
-      final lat = place.latitude!;
-      final lng = place.longitude!;
-      uri = Uri.parse(
-        'https://map.naver.com/v5/?c=$lng,$lat,15,0,0,0,dh'
-        '&title=${Uri.encodeComponent(place.name)}',
-      );
-    } else if (place.hasCoordinates) {
-      final lat = place.latitude!;
-      final lng = place.longitude!;
-      uri = Uri.parse(
-        'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
-      );
     } else {
-      return;
+      final mapsUrl = place.mapsUrl?.trim();
+      final isGoogleMapUrl = mapsUrl != null &&
+          mapsUrl.isNotEmpty &&
+          (mapsUrl.contains('google.com/maps') ||
+              mapsUrl.contains('maps.google') ||
+              mapsUrl.contains('goo.gl/maps'));
+
+      if (isGoogleMapUrl) {
+        uri = Uri.parse(mapsUrl);
+      } else if (place.hasCoordinates) {
+        final lat = place.latitude!;
+        final lng = place.longitude!;
+        uri = Uri.parse(
+          'https://www.google.com/maps/search/?api=1&query=$lat,$lng',
+        );
+      } else if (mapsUrl != null && mapsUrl.isNotEmpty) {
+        uri = Uri.parse(mapsUrl);
+      } else {
+        return;
+      }
     }
 
     await launchUrl(uri, mode: LaunchMode.externalApplication);

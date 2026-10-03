@@ -12,7 +12,14 @@ class Env {
 
   static String _read(String key) {
     if (!dotenv.isInitialized) return '';
-    return dotenv.env[key]?.trim() ?? '';
+    var value = dotenv.env[key]?.trim() ?? '';
+    // .env에서 "값" 형태로 넣은 경우 따옴표 제거
+    if (value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.substring(1, value.length - 1);
+    }
+    return value;
   }
 
   static String get supabaseUrl => _read('SUPABASE_URL');

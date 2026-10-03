@@ -38,6 +38,7 @@ class NaverLocalClient {
     final uri = Uri.parse(_searchUrl).replace(queryParameters: {
       'query': query,
       'display': '5',
+      'start': '1',
       'sort': 'random',
       'format': 'json',
     });
@@ -67,13 +68,18 @@ class NaverLocalClient {
       // WGS84 — 소수점이 없는 정수면 /1e7, 이미 소수면 그대로
       final lng = _coord(item['mapx']);
       final lat = _coord(item['mapy']);
+      // item['link']는 업체 홈페이지인 경우가 많아 지도 URL로 쓰지 않는다.
+      final placeName = name.isEmpty ? query : name;
 
       return PlaceSelection(
-        name: name.isEmpty ? query : name,
+        name: placeName,
         address: address.isEmpty ? null : address,
         countryCode: 'KR',
         latitude: lat,
         longitude: lng,
+        // mapsUrl은 사용자가 붙여넣는 플레이스 상세 링크(B)용.
+        // 검색 API에는 Place ID가 없어 여기서는 채우지 않는다.
+        mapsUrl: null,
       );
     }).where((p) => p.name.isNotEmpty).toList();
   }
@@ -105,4 +111,64 @@ class NaverLocalClient {
     }
     return '네이버 장소 검색에 실패했습니다. (${response.statusCode})';
   }
+}
+
+/// tripstory Android applicationId / iOS bundle용 appname
+const kNaverMapAppName = 'com.tripstory.tripstory';
+
+/// 네이버 지도 앱에 등록 좌표+이름 마커를 표시하는 URL Scheme.
+/// https://guide.ncloud-docs.com/docs/maps-url-scheme
+Uri? naverMapAppPlaceUri({
+  required String name,
+  double? latitude,
+  double? longitude,
+}) {
+  if (latitude == null || longitude == null) return null;
+  final encoded = Uri.encodeComponent(name.trim().isEmpty ? '장소' : name.trim());
+  return Uri.parse(
+    'nmap://place?lat=$latitude&lng=$longitude'
+    '&name=$encoded&appname=$kNaverMapAppName',
+  );
+}
+
+/// 네이버 지도 앱이 없을 때 Play 스토어로 보내는 Android Intent URL
+Uri? naverMapAndroidIntentUri({
+  required String name,
+  double? latitude,
+  double? longitude,
+}) {
+  if (latitude == null || longitude == null) return null;
+  final encoded = Uri.encodeComponent(name.trim().isEmpty ? '장소' : name.trim());
+  return Uri.parse(
+    'intent://place?lat=$latitude&lng=$longitude'
+    '&name=$encoded&appname=$kNaverMapAppName'
+    '#Intent;scheme=nmap;action=android.intent.action.VIEW;'
+    'category=android.intent.category.BROWSABLE;'
+    'package=com.nhn.android.nmap;end',
+  );
+}
+
+/// 웹 폴백: 네이버 지도에서 해당 좌표에 장소 핀 (검색 목록 아님)
+String? naverPlacePinUrl({
+  required String name,
+  double? latitude,
+  double? longitude,
+}) {
+  if (latitude == null || longitude == null) return null;
+  final encoded = Uri.encodeComponent(name.trim().isEmpty ? '장소' : name.trim());
+  return 'https://map.naver.com/v5/entry/address/$longitude,$latitude/$encoded';
+}
+
+/// 네이버 플레이스 상세 URL인지 (`/place/{id}` 등)
+bool isNaverPlaceDetailUrl(String? url) {
+  if (url == null) return false;
+  final u = url.trim().toLowerCase();
+  if (u.isEmpty) return false;
+  final isNaverHost =
+      u.contains('map.naver.com') || u.contains('naver.me') || u.contains('place.naver.com');
+  if (!isNaverHost) return false;
+  return u.contains('naver.me') ||
+      u.contains('/place/') ||
+      u.contains('placepath') ||
+      u.contains('/entry/place');
 }

@@ -183,9 +183,19 @@ class TravelDetailPage extends ConsumerWidget {
                       '${AppRoutes.travels}/${travel.id}/places',
                     ),
                   ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.calendar_month_outlined),
+                    title: const Text('일정'),
+                    subtitle: const Text('날짜별 일정 · 순서 · Plan B'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push(
+                      '${AppRoutes.travels}/${travel.id}/schedules',
+                    ),
+                  ),
                   const SizedBox(height: 40),
                   Text(
-                    '일정 · 비용 등은 다음 단계에서 추가됩니다.',
+                    '비용 · 정산 등은 다음 단계에서 추가됩니다.',
                     style: Theme.of(context).textTheme.bodyMedium,
                     textAlign: TextAlign.center,
                   ),
