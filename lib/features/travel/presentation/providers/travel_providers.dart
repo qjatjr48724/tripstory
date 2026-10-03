@@ -7,6 +7,7 @@ import '../../data/travel_repository.dart';
 import '../../domain/expense.dart';
 import '../../domain/place.dart';
 import '../../domain/schedule.dart';
+import '../../domain/settlement.dart';
 import '../../domain/travel.dart';
 import '../../domain/travel_member.dart';
 
@@ -57,4 +58,9 @@ final travelSchedulesProvider = FutureProvider.autoDispose
 final travelExpensesProvider = FutureProvider.autoDispose
     .family<List<Expense>, String>((ref, travelId) async {
   return ref.read(travelRepositoryProvider).fetchExpenses(travelId);
+});
+
+final travelSettlementsProvider = FutureProvider.autoDispose
+    .family<List<Settlement>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchSettlements(travelId);
 });
