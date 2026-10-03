@@ -2,6 +2,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/env.dart';
 import '../../../core/constants/roles.dart';
+import '../domain/expense.dart';
 import '../domain/place.dart';
 import '../domain/schedule.dart';
 import '../domain/travel.dart';
@@ -792,6 +793,273 @@ class TravelRepository {
       if (e is TravelException) rethrow;
       throw TravelException('Plan B 저장에 실패했습니다.');
     }
+  }
+
+  Future<Map<String, TravelMember>> _membersById(String travelId) async {
+    final members = await fetchMembers(travelId);
+    return {for (final m in members) m.id: m};
+  }
+
+  Future<List<Expense>> fetchExpenses(String travelId) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final rows = await client
+          .from('expenses')
+          .select('*, expense_participants(*)')
+          .eq('travel_id', travelId)
+          .order('paid_at', ascending: false);
+
+      return (rows as List)
+          .map(
+            (row) => Expense.fromJson(
+              Map<String, dynamic>.from(row as Map),
+              membersById: membersById,
+            ),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('비용 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<Expense> fetchExpense(String travelId, String expenseId) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final row = await client
+          .from('expenses')
+          .select('*, expense_participants(*)')
+          .eq('id', expenseId)
+          .eq('travel_id', travelId)
+          .maybeSingle();
+      if (row == null) {
+        throw TravelException('비용을 찾을 수 없습니다.');
+      }
+      return Expense.fromJson(
+        Map<String, dynamic>.from(row),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('비용 정보를 불러오지 못했습니다.');
+    }
+  }
+
+  Future<Expense> createExpense({
+    required String travelId,
+    required ExpenseCategory category,
+    required int amount,
+    required String currency,
+    required String payerMemberId,
+    required PaymentMethod paymentMethod,
+    required DateTime paidAt,
+    required SplitType splitType,
+    required List<String> participantMemberIds,
+    Map<String, int>? customShares,
+    String? description,
+    bool excludeFromSettlement = false,
+  }) async {
+    final client = _requireClient;
+    if (amount < 0) {
+      throw TravelException('금액은 0 이상이어야 합니다.');
+    }
+    if (participantMemberIds.isEmpty && !excludeFromSettlement) {
+      throw TravelException('정산 참여자를 한 명 이상 선택하세요.');
+    }
+
+    final split = _resolveShares(
+      amount: amount,
+      splitType: splitType,
+      participantMemberIds: participantMemberIds,
+      customShares: customShares,
+      excludeFromSettlement: excludeFromSettlement,
+    );
+
+    try {
+      final row = await client
+          .from('expenses')
+          .insert({
+            'travel_id': travelId,
+            'category': category.dbValue,
+            'description': _nullIfEmpty(description),
+            'amount': amount,
+            'currency': currency,
+            'payer_member_id': payerMemberId,
+            'payment_method': paymentMethod.dbValue,
+            'paid_at': paidAt.toUtc().toIso8601String(),
+            'split_type': splitType.dbValue,
+            'exclude_from_settlement': excludeFromSettlement,
+            'undistributed_remainder': split.remainder,
+          })
+          .select()
+          .single();
+
+      final expenseId = row['id'] as String;
+      if (split.shares.isNotEmpty) {
+        await client.from('expense_participants').insert(
+              split.shares.entries
+                  .map(
+                    (e) => {
+                      'expense_id': expenseId,
+                      'member_id': e.key,
+                      'share_amount': e.value,
+                    },
+                  )
+                  .toList(),
+            );
+      }
+
+      return fetchExpense(travelId, expenseId);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('비용 등록에 실패했습니다.');
+    }
+  }
+
+  Future<Expense> updateExpense({
+    required Expense expense,
+    required ExpenseCategory category,
+    required int amount,
+    required String currency,
+    required String payerMemberId,
+    required PaymentMethod paymentMethod,
+    required DateTime paidAt,
+    required SplitType splitType,
+    required List<String> participantMemberIds,
+    Map<String, int>? customShares,
+    String? description,
+    bool excludeFromSettlement = false,
+  }) async {
+    final client = _requireClient;
+    if (expense.isSettlementCompleted) {
+      throw TravelException('정산이 완료된 비용은 수정할 수 없습니다.');
+    }
+    if (amount < 0) {
+      throw TravelException('금액은 0 이상이어야 합니다.');
+    }
+    if (participantMemberIds.isEmpty && !excludeFromSettlement) {
+      throw TravelException('정산 참여자를 한 명 이상 선택하세요.');
+    }
+
+    final split = _resolveShares(
+      amount: amount,
+      splitType: splitType,
+      participantMemberIds: participantMemberIds,
+      customShares: customShares,
+      excludeFromSettlement: excludeFromSettlement,
+    );
+
+    try {
+      final rows = await client
+          .from('expenses')
+          .update({
+            'category': category.dbValue,
+            'description': _nullIfEmpty(description),
+            'amount': amount,
+            'currency': currency,
+            'payer_member_id': payerMemberId,
+            'payment_method': paymentMethod.dbValue,
+            'paid_at': paidAt.toUtc().toIso8601String(),
+            'split_type': splitType.dbValue,
+            'exclude_from_settlement': excludeFromSettlement,
+            'undistributed_remainder': split.remainder,
+            'version': expense.version + 1,
+          })
+          .eq('id', expense.id)
+          .eq('version', expense.version)
+          .select();
+
+      if ((rows as List).isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 최신 내용을 확인한 후 다시 수정해주세요.',
+        );
+      }
+
+      await client
+          .from('expense_participants')
+          .delete()
+          .eq('expense_id', expense.id);
+
+      if (split.shares.isNotEmpty) {
+        await client.from('expense_participants').insert(
+              split.shares.entries
+                  .map(
+                    (e) => {
+                      'expense_id': expense.id,
+                      'member_id': e.key,
+                      'share_amount': e.value,
+                    },
+                  )
+                  .toList(),
+            );
+      }
+
+      return fetchExpense(expense.travelId, expense.id);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('비용 수정에 실패했습니다.');
+    }
+  }
+
+  Future<void> deleteExpense(Expense expense) async {
+    final client = _requireClient;
+    if (expense.isSettlementCompleted) {
+      throw TravelException('정산이 완료된 비용은 삭제할 수 없습니다.');
+    }
+    try {
+      await client.from('expenses').delete().eq('id', expense.id);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('비용 삭제에 실패했습니다.');
+    }
+  }
+
+  ({Map<String, int> shares, int remainder}) _resolveShares({
+    required int amount,
+    required SplitType splitType,
+    required List<String> participantMemberIds,
+    Map<String, int>? customShares,
+    required bool excludeFromSettlement,
+  }) {
+    if (excludeFromSettlement || participantMemberIds.isEmpty) {
+      return (shares: <String, int>{}, remainder: 0);
+    }
+
+    if (splitType == SplitType.equal) {
+      final result = equalSplitShares(amount, participantMemberIds.length);
+      final shares = <String, int>{};
+      for (var i = 0; i < participantMemberIds.length; i++) {
+        shares[participantMemberIds[i]] = result.shares[i];
+      }
+      return (shares: shares, remainder: result.remainder);
+    }
+
+    final shares = <String, int>{};
+    var sum = 0;
+    for (final id in participantMemberIds) {
+      final value = customShares?[id] ?? 0;
+      if (value < 0) {
+        throw TravelException('분담 금액은 0 이상이어야 합니다.');
+      }
+      shares[id] = value;
+      sum += value;
+    }
+    if (sum > amount) {
+      throw TravelException('분담 합계가 총액보다 클 수 없습니다.');
+    }
+    return (shares: shares, remainder: amount - sum);
   }
 
   String? _nullIfEmpty(String? value) {

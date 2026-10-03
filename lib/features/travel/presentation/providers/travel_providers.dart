@@ -4,6 +4,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../../core/config/env.dart';
 import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/travel_repository.dart';
+import '../../domain/expense.dart';
 import '../../domain/place.dart';
 import '../../domain/schedule.dart';
 import '../../domain/travel.dart';
@@ -51,4 +52,9 @@ final travelPlacesProvider =
 final travelSchedulesProvider = FutureProvider.autoDispose
     .family<List<ScheduleItem>, String>((ref, travelId) async {
   return ref.read(travelRepositoryProvider).fetchSchedules(travelId);
+});
+
+final travelExpensesProvider = FutureProvider.autoDispose
+    .family<List<Expense>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchExpenses(travelId);
 });
