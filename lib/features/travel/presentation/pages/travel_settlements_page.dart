@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../../../core/constants/roles.dart';
 import '../../../../core/theme/app_colors.dart';
 import '../../data/travel_repository.dart';
+import '../../domain/expense.dart';
 import '../../domain/settlement.dart';
 import '../../domain/travel.dart';
 import '../../domain/travel_member.dart';
@@ -72,60 +73,71 @@ class TravelSettlementsPage extends ConsumerWidget {
                         for (final m in members) m.id: m,
                       };
                       final me = members.where((m) => m.isMe).firstOrNull;
+                      if (me == null) {
+                        return const Center(
+                          child: Text('구성원 정보를 확인할 수 없습니다.'),
+                        );
+                      }
+
+                      final myView = buildMySettlementView(
+                        myMemberId: me.id,
+                        expenses: expenses,
+                        membersById: membersById,
+                      );
                       final plan = buildSettlementPlan(
                         expenses: expenses,
                         membersById: membersById,
                       );
+
+                      // 일반 구성원: 나와 관련된 송금만. 대행 가능 역할: 전체.
+                      final visibleSettlements = canProxy
+                          ? settlements
+                          : settlements
+                              .where(
+                                (s) =>
+                                    s.fromMemberId == me.id ||
+                                    s.toMemberId == me.id,
+                              )
+                              .toList();
+
                       final allConfirmed = settlements.isNotEmpty &&
                           settlements.every((s) => s.isFullyConfirmed);
 
                       return ListView(
                         padding: const EdgeInsets.fromLTRB(16, 12, 16, 32),
                         children: [
-                          _SectionCard(
-                            title: '잔액 요약',
-                            child: plan.balances.isEmpty
-                                ? Text(
-                                    plan.openExpenseCount == 0
-                                        ? '정산할 진행 중 비용이 없습니다.'
-                                        : '구성원 간 주고받을 금액이 없습니다.',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(
-                                          color: AppColors.textSecondary,
-                                        ),
-                                  )
-                                : Column(
-                                    children: plan.balances.map((b) {
-                                      final name =
-                                          b.member?.displayName ?? '구성원';
-                                      final positive = b.net > 0;
-                                      return Padding(
-                                        padding:
-                                            const EdgeInsets.only(bottom: 6),
-                                        child: Row(
-                                          children: [
-                                            Expanded(child: Text(name)),
-                                            Text(
-                                              positive
-                                                  ? '받을 돈 ${b.currency} ${amountFormat.format(b.net)}'
-                                                  : '낼 돈 ${b.currency} ${amountFormat.format(-b.net)}',
-                                              style: TextStyle(
-                                                fontWeight: FontWeight.w600,
-                                                color: positive
-                                                    ? AppColors.success
-                                                    : AppColors.error,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                      );
-                                    }).toList(),
-                                  ),
-                          ),
+                          if (myView.isEmpty)
+                            _SectionCard(
+                              title: '내 정산',
+                              child: Text(
+                                plan.openExpenseCount == 0
+                                    ? '정산할 진행 중 비용이 없습니다.'
+                                    : '지금 주고받을 금액이 없습니다.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodyMedium
+                                    ?.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
+                              ),
+                            )
+                          else ...[
+                            if (myView.hasReceivables) ...[
+                              _ReceivablesSection(
+                                view: myView,
+                                amountFormat: amountFormat,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                            if (myView.hasPayables) ...[
+                              _PayablesSection(
+                                view: myView,
+                                amountFormat: amountFormat,
+                              ),
+                              const SizedBox(height: 16),
+                            ],
+                          ],
                           if (plan.hasUndistributedRemainder) ...[
-                            const SizedBox(height: 12),
                             Card(
                               color: AppColors.surfaceMuted,
                               margin: EdgeInsets.zero,
@@ -139,38 +151,93 @@ class TravelSettlementsPage extends ConsumerWidget {
                                 ),
                               ),
                             ),
+                            const SizedBox(height: 16),
                           ],
-                          const SizedBox(height: 16),
-                          _SectionCard(
-                            title: '추천 송금',
-                            child: plan.transfers.isEmpty
-                                ? Text(
-                                    '추천 송금이 없습니다.',
-                                    style: Theme.of(context)
-                                        .textTheme
-                                        .bodyMedium
-                                        ?.copyWith(
-                                          color: AppColors.textSecondary,
-                                        ),
-                                  )
-                                : Column(
-                                    children: plan.transfers.map((t) {
-                                      final from =
-                                          t.fromMember?.displayName ?? '구성원';
-                                      final to =
-                                          t.toMember?.displayName ?? '구성원';
-                                      return Padding(
-                                        padding:
-                                            const EdgeInsets.only(bottom: 6),
-                                        child: Text(
-                                          '$from → $to  '
-                                          '${t.currency} ${amountFormat.format(t.amount)}',
-                                        ),
-                                      );
-                                    }).toList(),
-                                  ),
+                          Text(
+                            '내 송금 확인',
+                            style: Theme.of(context).textTheme.titleMedium,
                           ),
+                          const SizedBox(height: 8),
+                          if (visibleSettlements.isEmpty)
+                            Text(
+                              settlements.isEmpty
+                                  ? '여행장·총무가 「송금 목록 만들기」를 누르면 확인을 시작할 수 있습니다.'
+                                  : '나와 관련된 송금 확인 항목이 없습니다.',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodyMedium
+                                  ?.copyWith(
+                                    color: AppColors.textSecondary,
+                                  ),
+                            )
+                          else
+                            ..._groupSettlementsByMember(
+                              visibleSettlements,
+                              me: me,
+                            ).map(
+                              (group) => _SettlementMemberGroupCard(
+                                group: group,
+                                amountFormat: amountFormat,
+                                me: me,
+                                canEdit: canEdit,
+                                canProxy: canProxy,
+                                onSent: (s) => _confirmSent(
+                                  context,
+                                  ref,
+                                  s,
+                                  me: me,
+                                  asProxy: canProxy &&
+                                      s.fromMemberId != me.id,
+                                ),
+                                onReceived: (s) => _confirmReceived(
+                                  context,
+                                  ref,
+                                  s,
+                                  me: me,
+                                  asProxy: canProxy &&
+                                      s.toMemberId != me.id,
+                                ),
+                              ),
+                            ),
                           if (canEdit && canConfirm) ...[
+                            const SizedBox(height: 28),
+                            const Divider(),
+                            const SizedBox(height: 12),
+                            Text(
+                              '여행장 · 총무',
+                              style: Theme.of(context).textTheme.titleMedium,
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              '전체 추천 송금으로 확인용 목록을 만들고, 정산을 완료합니다.',
+                              style: Theme.of(context)
+                                  .textTheme
+                                  .bodySmall
+                                  ?.copyWith(
+                                    color: AppColors.textSecondary,
+                                  ),
+                            ),
+                            const SizedBox(height: 12),
+                            if (plan.transfers.isNotEmpty)
+                              _SectionCard(
+                                title: '전체 추천 송금',
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: plan.transfers.map((t) {
+                                    final from =
+                                        t.fromMember?.displayName ?? '구성원';
+                                    final to =
+                                        t.toMember?.displayName ?? '구성원';
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 6),
+                                      child: Text(
+                                        '$from → $to  '
+                                        '${t.currency} ${amountFormat.format(t.amount)}',
+                                      ),
+                                    );
+                                  }).toList(),
+                                ),
+                              ),
                             const SizedBox(height: 12),
                             FilledButton.icon(
                               onPressed: plan.transfers.isEmpty
@@ -196,72 +263,29 @@ class TravelSettlementsPage extends ConsumerWidget {
                                       ),
                                 ),
                               ),
-                          ],
-                          const SizedBox(height: 20),
-                          Text(
-                            '송금 확인',
-                            style: Theme.of(context).textTheme.titleMedium,
-                          ),
-                          const SizedBox(height: 8),
-                          if (settlements.isEmpty)
-                            Text(
-                              '여행장·총무가 「송금 목록 만들기」를 누르면 확인을 시작할 수 있습니다.',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodyMedium
-                                  ?.copyWith(
-                                    color: AppColors.textSecondary,
-                                  ),
-                            )
-                          else
-                            ...settlements.map(
-                              (s) => _SettlementTile(
-                                settlement: s,
-                                amountFormat: amountFormat,
-                                me: me,
-                                canEdit: canEdit,
-                                canProxy: canProxy,
-                                onSent: () => _confirmSent(
-                                  context,
-                                  ref,
-                                  s,
-                                  me: me,
-                                  asProxy: canProxy &&
-                                      me != null &&
-                                      s.fromMemberId != me.id,
-                                ),
-                                onReceived: () => _confirmReceived(
-                                  context,
-                                  ref,
-                                  s,
-                                  me: me,
-                                  asProxy: canProxy &&
-                                      me != null &&
-                                      s.toMemberId != me.id,
-                                ),
+                            if (settlements.isNotEmpty) ...[
+                              const SizedBox(height: 16),
+                              OutlinedButton.icon(
+                                onPressed: allConfirmed
+                                    ? () =>
+                                        _completeSettlements(context, ref)
+                                    : null,
+                                icon: const Icon(Icons.lock_outline),
+                                label: const Text('정산 완료 (비용 잠금)'),
                               ),
-                            ),
-                          if (canEdit && canConfirm && settlements.isNotEmpty) ...[
-                            const SizedBox(height: 20),
-                            OutlinedButton.icon(
-                              onPressed: allConfirmed
-                                  ? () => _completeSettlements(context, ref)
-                                  : null,
-                              icon: const Icon(Icons.lock_outline),
-                              label: const Text('정산 완료 (비용 잠금)'),
-                            ),
-                            const SizedBox(height: 6),
-                            Text(
-                              allConfirmed
-                                  ? '모든 송금·수령 확인이 끝났습니다. 완료하면 관련 비용을 수정·삭제할 수 없습니다.'
-                                  : '모든 항목의 송금·수령 확인이 끝나면 완료할 수 있습니다.',
-                              style: Theme.of(context)
-                                  .textTheme
-                                  .bodySmall
-                                  ?.copyWith(
-                                    color: AppColors.textSecondary,
-                                  ),
-                            ),
+                              const SizedBox(height: 6),
+                              Text(
+                                allConfirmed
+                                    ? '모든 송금·수령 확인이 끝났습니다. 완료하면 관련 비용을 수정·삭제할 수 없습니다.'
+                                    : '모든 항목의 송금·수령 확인이 끝나면 완료할 수 있습니다.',
+                                style: Theme.of(context)
+                                    .textTheme
+                                    .bodySmall
+                                    ?.copyWith(
+                                      color: AppColors.textSecondary,
+                                    ),
+                              ),
+                            ],
                           ],
                         ],
                       );
@@ -414,11 +438,153 @@ class TravelSettlementsPage extends ConsumerWidget {
   }
 }
 
+class _ReceivablesSection extends StatelessWidget {
+  const _ReceivablesSection({
+    required this.view,
+    required this.amountFormat,
+  });
+
+  final MySettlementView view;
+  final NumberFormat amountFormat;
+
+  @override
+  Widget build(BuildContext context) {
+    final totals = view.receivableTotalsByCurrency.entries
+        .map((e) => '${e.key} ${amountFormat.format(e.value)}')
+        .join(' · ');
+
+    return _SectionCard(
+      title: '내가 받을 돈',
+      trailing: Text(
+        totals,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: AppColors.success,
+              fontWeight: FontWeight.w700,
+            ),
+      ),
+      child: Column(
+        children: view.receivables.map((r) {
+          final name = r.fromMember?.displayName ?? '구성원';
+          final amountLabel = r.totalsByCurrency.entries
+              .map((e) => '${e.key} ${amountFormat.format(e.value)}')
+              .join(' · ');
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            color: AppColors.surfaceMuted,
+            elevation: 0,
+            child: ExpansionTile(
+              tilePadding: const EdgeInsets.symmetric(horizontal: 12),
+              childrenPadding: const EdgeInsets.fromLTRB(12, 0, 12, 12),
+              title: Text(
+                name,
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '$amountLabel · 항목 ${r.itemCount}건',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.success,
+                ),
+              ),
+              children: r.items.map((item) {
+                return Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          _expenseTitle(item.expense),
+                          style: Theme.of(context).textTheme.bodyMedium,
+                        ),
+                      ),
+                      Text(
+                        '${item.expense.currency} ${amountFormat.format(item.shareAmount)}',
+                        style: Theme.of(context).textTheme.bodyMedium,
+                      ),
+                    ],
+                  ),
+                );
+              }).toList(),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+class _PayablesSection extends StatelessWidget {
+  const _PayablesSection({
+    required this.view,
+    required this.amountFormat,
+  });
+
+  final MySettlementView view;
+  final NumberFormat amountFormat;
+
+  @override
+  Widget build(BuildContext context) {
+    final totals = view.payableTotalsByCurrency.entries
+        .map((e) => '${e.key} ${amountFormat.format(e.value)}')
+        .join(' · ');
+
+    return _SectionCard(
+      title: '내가 낼 돈',
+      trailing: Text(
+        totals,
+        style: Theme.of(context).textTheme.titleSmall?.copyWith(
+              color: AppColors.error,
+              fontWeight: FontWeight.w700,
+            ),
+      ),
+      child: Column(
+        children: view.payables.map((item) {
+          final payTo = item.payToMember?.displayName ?? '결제자';
+          return Card(
+            margin: const EdgeInsets.only(bottom: 8),
+            color: AppColors.surfaceMuted,
+            elevation: 0,
+            child: ListTile(
+              contentPadding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+              title: Text(
+                _expenseTitle(item.expense),
+                style: const TextStyle(fontWeight: FontWeight.w600),
+              ),
+              subtitle: Text(
+                '${item.expense.category.label} · $payTo 님에게',
+              ),
+              trailing: Text(
+                '${item.expense.currency} ${amountFormat.format(item.shareAmount)}',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  color: AppColors.error,
+                ),
+              ),
+            ),
+          );
+        }).toList(),
+      ),
+    );
+  }
+}
+
+String _expenseTitle(Expense expense) {
+  final desc = expense.description?.trim();
+  if (desc != null && desc.isNotEmpty) return desc;
+  return expense.category.label;
+}
+
 class _SectionCard extends StatelessWidget {
-  const _SectionCard({required this.title, required this.child});
+  const _SectionCard({
+    required this.title,
+    required this.child,
+    this.trailing,
+  });
 
   final String title;
   final Widget child;
+  final Widget? trailing;
 
   @override
   Widget build(BuildContext context) {
@@ -429,7 +595,17 @@ class _SectionCard extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(title, style: Theme.of(context).textTheme.titleSmall),
+            Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    title,
+                    style: Theme.of(context).textTheme.titleSmall,
+                  ),
+                ),
+                ?trailing,
+              ],
+            ),
             const SizedBox(height: 10),
             child,
           ],
@@ -439,9 +615,79 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-class _SettlementTile extends StatelessWidget {
-  const _SettlementTile({
-    required this.settlement,
+class _SettlementMemberGroup {
+  const _SettlementMemberGroup({
+    required this.key,
+    required this.title,
+    required this.settlements,
+    required this.relationLabel,
+  });
+
+  final String key;
+  final String title;
+  final List<Settlement> settlements;
+
+  /// 예: '보내기' / '받기' / '송금'
+  final String relationLabel;
+}
+
+List<_SettlementMemberGroup> _groupSettlementsByMember(
+  List<Settlement> settlements, {
+  required TravelMember me,
+}) {
+  final groups = <String, _SettlementMemberGroup>{};
+
+  for (final s in settlements) {
+    final isSender = s.fromMemberId == me.id;
+    final isReceiver = s.toMemberId == me.id;
+
+    late final String key;
+    late final String title;
+    late final String relationLabel;
+
+    if (isSender) {
+      key = 'to:${s.toMemberId}';
+      title = s.toMember?.displayName ?? '구성원';
+      relationLabel = '보내기';
+    } else if (isReceiver) {
+      key = 'from:${s.fromMemberId}';
+      title = s.fromMember?.displayName ?? '구성원';
+      relationLabel = '받기';
+    } else {
+      // 대행용: 나와 무관한 건은 송금 쌍으로
+      key = 'pair:${s.fromMemberId}|${s.toMemberId}';
+      final from = s.fromMember?.displayName ?? '구성원';
+      final to = s.toMember?.displayName ?? '구성원';
+      title = '$from → $to';
+      relationLabel = '송금';
+    }
+
+    final existing = groups[key];
+    if (existing == null) {
+      groups[key] = _SettlementMemberGroup(
+        key: key,
+        title: title,
+        settlements: [s],
+        relationLabel: relationLabel,
+      );
+    } else {
+      groups[key] = _SettlementMemberGroup(
+        key: existing.key,
+        title: existing.title,
+        settlements: [...existing.settlements, s],
+        relationLabel: existing.relationLabel,
+      );
+    }
+  }
+
+  final list = groups.values.toList()
+    ..sort((a, b) => a.title.compareTo(b.title));
+  return list;
+}
+
+class _SettlementMemberGroupCard extends StatelessWidget {
+  const _SettlementMemberGroupCard({
+    required this.group,
     required this.amountFormat,
     required this.me,
     required this.canEdit,
@@ -450,97 +696,114 @@ class _SettlementTile extends StatelessWidget {
     required this.onReceived,
   });
 
-  final Settlement settlement;
+  final _SettlementMemberGroup group;
   final NumberFormat amountFormat;
-  final TravelMember? me;
+  final TravelMember me;
   final bool canEdit;
   final bool canProxy;
-  final VoidCallback onSent;
-  final VoidCallback onReceived;
+  final void Function(Settlement) onSent;
+  final void Function(Settlement) onReceived;
 
   @override
   Widget build(BuildContext context) {
-    final from = settlement.fromMember?.displayName ?? '구성원';
-    final to = settlement.toMember?.displayName ?? '구성원';
-    final isSender = me?.id == settlement.fromMemberId;
-    final isReceiver = me?.id == settlement.toMemberId;
-    final canMarkSent = canEdit &&
-        !settlement.sentConfirmed &&
-        (isSender || canProxy);
-    final canMarkReceived = canEdit &&
-        settlement.sentConfirmed &&
-        !settlement.receivedConfirmed &&
-        (isReceiver || canProxy);
+    final totals = <String, int>{};
+    for (final s in group.settlements) {
+      totals[s.currency] = (totals[s.currency] ?? 0) + s.amount;
+    }
+    final amountLabel = totals.entries
+        .map((e) => '${e.key} ${amountFormat.format(e.value)}')
+        .join(' · ');
+
+    final headline = group.relationLabel == '보내기'
+        ? '${group.title} 님에게 보내기'
+        : group.relationLabel == '받기'
+            ? '${group.title} 님에게서 받기'
+            : group.title;
 
     return Card(
       margin: const EdgeInsets.only(bottom: 8),
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              '$from → $to',
-              style: const TextStyle(fontWeight: FontWeight.w600),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              '${settlement.currency} ${amountFormat.format(settlement.amount)}',
-            ),
-            const SizedBox(height: 8),
-            Wrap(
-              spacing: 8,
-              runSpacing: 8,
+      child: ExpansionTile(
+        tilePadding: const EdgeInsets.symmetric(horizontal: 16),
+        childrenPadding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+        initiallyExpanded: group.settlements.length == 1,
+        title: Text(
+          headline,
+          style: const TextStyle(fontWeight: FontWeight.w600),
+        ),
+        subtitle: Text(
+          '$amountLabel · ${group.settlements.length}건',
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            color: group.relationLabel == '받기'
+                ? AppColors.success
+                : group.relationLabel == '보내기'
+                    ? AppColors.error
+                    : AppColors.textSecondary,
+          ),
+        ),
+        children: group.settlements.map((settlement) {
+          final isSender = me.id == settlement.fromMemberId;
+          final isReceiver = me.id == settlement.toMemberId;
+          final canMarkSent = canEdit &&
+              !settlement.sentConfirmed &&
+              (isSender || canProxy);
+          final canMarkReceived = canEdit &&
+              settlement.sentConfirmed &&
+              !settlement.receivedConfirmed &&
+              (isReceiver || canProxy);
+
+          return Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Chip(
-                  label: Text(
-                    settlement.sentConfirmed
-                        ? (settlement.sentByProxyMemberId != null
-                            ? '송금 확인(대행)'
-                            : '송금 확인')
-                        : '송금 대기',
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  backgroundColor: settlement.sentConfirmed
-                      ? AppColors.success.withValues(alpha: 0.15)
-                      : null,
-                ),
-                Chip(
-                  label: Text(
-                    settlement.receivedConfirmed
-                        ? (settlement.receivedByProxyMemberId != null
-                            ? '수령 확인(대행)'
-                            : '수령 확인')
-                        : '수령 대기',
-                  ),
-                  visualDensity: VisualDensity.compact,
-                  backgroundColor: settlement.receivedConfirmed
-                      ? AppColors.success.withValues(alpha: 0.15)
-                      : null,
-                ),
-              ],
-            ),
-            if (canMarkSent || canMarkReceived) ...[
-              const SizedBox(height: 8),
-              Row(
-                children: [
-                  if (canMarkSent)
-                    FilledButton.tonal(
-                      onPressed: onSent,
-                      child: Text(isSender ? '보냈어요!' : '송금 대행 확인'),
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        '${settlement.currency} ${amountFormat.format(settlement.amount)}',
+                        style: const TextStyle(fontWeight: FontWeight.w600),
+                      ),
                     ),
-                  if (canMarkReceived) ...[
-                    if (canMarkSent) const SizedBox(width: 8),
-                    FilledButton.tonal(
-                      onPressed: onReceived,
-                      child: Text(isReceiver ? '수령 확인' : '수령 대행 확인'),
+                    Chip(
+                      label: Text(
+                        settlement.isFullyConfirmed
+                            ? '완료'
+                            : settlement.sentConfirmed
+                                ? '수령 대기'
+                                : '송금 대기',
+                      ),
+                      visualDensity: VisualDensity.compact,
+                      backgroundColor: settlement.isFullyConfirmed
+                          ? AppColors.success.withValues(alpha: 0.15)
+                          : null,
                     ),
                   ],
+                ),
+                if (canMarkSent || canMarkReceived) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      if (canMarkSent)
+                        FilledButton.tonal(
+                          onPressed: () => onSent(settlement),
+                          child: Text(isSender ? '보냈어요!' : '송금 대행 확인'),
+                        ),
+                      if (canMarkReceived) ...[
+                        if (canMarkSent) const SizedBox(width: 8),
+                        FilledButton.tonal(
+                          onPressed: () => onReceived(settlement),
+                          child:
+                              Text(isReceiver ? '수령 확인' : '수령 대행 확인'),
+                        ),
+                      ],
+                    ],
+                  ),
                 ],
-              ),
-            ],
-          ],
-        ),
+              ],
+            ),
+          );
+        }).toList(),
       ),
     );
   }
