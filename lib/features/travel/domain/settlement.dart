@@ -221,3 +221,148 @@ SettlementPlan buildSettlementPlan({
     undistributedRemainderByCurrency: remainders,
   );
 }
+
+/// 내가 특정 비용에서 결제자에게 내야 하는 항목
+class MyPayableItem {
+  const MyPayableItem({
+    required this.expense,
+    required this.shareAmount,
+    required this.payToMemberId,
+    this.payToMember,
+  });
+
+  final Expense expense;
+  final int shareAmount;
+  final String payToMemberId;
+  final TravelMember? payToMember;
+}
+
+/// 내가 한 사람에게 받아야 하는 합계 (+ 비용 항목). 통화가 달라도 구성원 단위로 묶는다.
+class MyReceivableFromPerson {
+  const MyReceivableFromPerson({
+    required this.fromMemberId,
+    required this.totalsByCurrency,
+    required this.items,
+    this.fromMember,
+  });
+
+  final String fromMemberId;
+  final Map<String, int> totalsByCurrency;
+  final List<MyPayableItem> items;
+  final TravelMember? fromMember;
+
+  int get itemCount => items.length;
+}
+
+/// 로그인한 구성원 기준 개인 정산 뷰
+class MySettlementView {
+  const MySettlementView({
+    required this.payables,
+    required this.receivables,
+    required this.payableTotalsByCurrency,
+    required this.receivableTotalsByCurrency,
+  });
+
+  /// 내가 낼 항목 (비용 단위)
+  final List<MyPayableItem> payables;
+
+  /// 내가 받을 금액 (상대방 단위)
+  final List<MyReceivableFromPerson> receivables;
+
+  final Map<String, int> payableTotalsByCurrency;
+  final Map<String, int> receivableTotalsByCurrency;
+
+  bool get hasPayables => payables.isNotEmpty;
+  bool get hasReceivables => receivables.isNotEmpty;
+  bool get isEmpty => !hasPayables && !hasReceivables;
+}
+
+MySettlementView buildMySettlementView({
+  required String myMemberId,
+  required List<Expense> expenses,
+  Map<String, TravelMember>? membersById,
+}) {
+  final open = expenses
+      .where((e) => !e.excludeFromSettlement && !e.isSettlementCompleted)
+      .toList();
+
+  final payables = <MyPayableItem>[];
+  final receivableMap = <String, MyReceivableFromPerson>{};
+  // key: fromMemberId (통화와 무관하게 구성원만)
+
+  for (final expense in open) {
+    for (final p in expense.participants) {
+      if (p.shareAmount <= 0) continue;
+
+      // 내가 참여자이고 결제자가 아니면 → 낼 돈 (비용 항목)
+      if (p.memberId == myMemberId && expense.payerMemberId != myMemberId) {
+        payables.add(
+          MyPayableItem(
+            expense: expense,
+            shareAmount: p.shareAmount,
+            payToMemberId: expense.payerMemberId,
+            payToMember: membersById?[expense.payerMemberId] ?? expense.payer,
+          ),
+        );
+      }
+
+      // 내가 결제자이고 상대가 참여자면 → 받을 돈 (상대방별)
+      if (expense.payerMemberId == myMemberId && p.memberId != myMemberId) {
+        final key = p.memberId;
+        final existing = receivableMap[key];
+        final item = MyPayableItem(
+          expense: expense,
+          shareAmount: p.shareAmount,
+          payToMemberId: myMemberId,
+          payToMember: membersById?[myMemberId],
+        );
+        if (existing == null) {
+          receivableMap[key] = MyReceivableFromPerson(
+            fromMemberId: p.memberId,
+            totalsByCurrency: {expense.currency: p.shareAmount},
+            items: [item],
+            fromMember: membersById?[p.memberId] ?? p.member,
+          );
+        } else {
+          final totals = Map<String, int>.from(existing.totalsByCurrency);
+          totals[expense.currency] =
+              (totals[expense.currency] ?? 0) + p.shareAmount;
+          receivableMap[key] = MyReceivableFromPerson(
+            fromMemberId: existing.fromMemberId,
+            totalsByCurrency: totals,
+            items: [...existing.items, item],
+            fromMember: existing.fromMember,
+          );
+        }
+      }
+    }
+  }
+
+  payables.sort((a, b) => b.expense.paidAt.compareTo(a.expense.paidAt));
+
+  final receivables = receivableMap.values.toList()
+    ..sort((a, b) {
+      final aName = a.fromMember?.displayName ?? '';
+      final bName = b.fromMember?.displayName ?? '';
+      return aName.compareTo(bName);
+    });
+
+  final payableTotals = <String, int>{};
+  for (final p in payables) {
+    payableTotals[p.expense.currency] =
+        (payableTotals[p.expense.currency] ?? 0) + p.shareAmount;
+  }
+  final receivableTotals = <String, int>{};
+  for (final r in receivables) {
+    for (final e in r.totalsByCurrency.entries) {
+      receivableTotals[e.key] = (receivableTotals[e.key] ?? 0) + e.value;
+    }
+  }
+
+  return MySettlementView(
+    payables: payables,
+    receivables: receivables,
+    payableTotalsByCurrency: payableTotals,
+    receivableTotalsByCurrency: receivableTotals,
+  );
+}
