@@ -9,16 +9,21 @@ import '../features/auth/presentation/pages/splash_page.dart';
 import '../features/auth/presentation/providers/auth_providers.dart';
 import '../features/travel/domain/expense.dart';
 import '../features/travel/domain/place.dart';
+import '../features/travel/domain/reservation.dart';
 import '../features/travel/domain/schedule.dart';
 import '../features/travel/presentation/pages/create_travel_page.dart';
 import '../features/travel/presentation/pages/expense_form_page.dart';
 import '../features/travel/presentation/pages/place_form_page.dart';
+import '../features/travel/presentation/pages/reservation_form_page.dart';
 import '../features/travel/presentation/pages/schedule_form_page.dart';
 import '../features/travel/presentation/pages/travel_detail_page.dart';
 import '../features/travel/presentation/pages/travel_expenses_page.dart';
+import '../features/travel/presentation/pages/travel_links_page.dart';
 import '../features/travel/presentation/pages/travel_list_page.dart';
 import '../features/travel/presentation/pages/travel_members_page.dart';
+import '../features/travel/presentation/pages/travel_photos_page.dart';
 import '../features/travel/presentation/pages/travel_places_page.dart';
+import '../features/travel/presentation/pages/travel_reservations_page.dart';
 import '../features/travel/presentation/pages/travel_schedules_page.dart';
 import '../features/travel/presentation/pages/travel_settlements_page.dart';
 
@@ -242,6 +247,68 @@ final List<RouteBase> _appRoutes = [
             builder: (context, state) {
               final id = state.pathParameters['travelId']!;
               return TravelSettlementsPage(travelId: id);
+            },
+          ),
+          GoRoute(
+            path: 'reservations',
+            name: 'travelReservations',
+            builder: (context, state) {
+              final id = state.pathParameters['travelId']!;
+              return TravelReservationsPage(travelId: id);
+            },
+            routes: [
+              GoRoute(
+                path: 'new',
+                name: 'reservationCreate',
+                builder: (context, state) {
+                  final id = state.pathParameters['travelId']!;
+                  final typeParam = state.uri.queryParameters['type'];
+                  ReservationType? initialType;
+                  if (typeParam != null) {
+                    initialType = ReservationType.fromDb(typeParam);
+                  }
+                  return ReservationFormPage(
+                    travelId: id,
+                    initialType: initialType,
+                  );
+                },
+              ),
+              GoRoute(
+                path: ':reservationId/edit',
+                name: 'reservationEdit',
+                builder: (context, state) {
+                  final id = state.pathParameters['travelId']!;
+                  final reservation = state.extra;
+                  if (reservation is! Reservation) {
+                    return Scaffold(
+                      appBar: AppBar(),
+                      body: const Center(
+                        child: Text('예약 정보를 불러오지 못했습니다.'),
+                      ),
+                    );
+                  }
+                  return ReservationFormPage(
+                    travelId: id,
+                    reservation: reservation,
+                  );
+                },
+              ),
+            ],
+          ),
+          GoRoute(
+            path: 'photos',
+            name: 'travelPhotos',
+            builder: (context, state) {
+              final id = state.pathParameters['travelId']!;
+              return TravelPhotosPage(travelId: id);
+            },
+          ),
+          GoRoute(
+            path: 'links',
+            name: 'travelLinks',
+            builder: (context, state) {
+              final id = state.pathParameters['travelId']!;
+              return TravelLinksPage(travelId: id);
             },
           ),
         ],

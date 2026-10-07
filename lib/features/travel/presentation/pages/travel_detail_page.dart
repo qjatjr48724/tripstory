@@ -213,9 +213,39 @@ class TravelDetailPage extends ConsumerWidget {
                       '${AppRoutes.travels}/${travel.id}/settlements',
                     ),
                   ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.airplane_ticket_outlined),
+                    title: const Text('예약'),
+                    subtitle: const Text('교통 · 숙소 · 확인 링크/이미지'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push(
+                      '${AppRoutes.travels}/${travel.id}/reservations',
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.photo_library_outlined),
+                    title: const Text('사진'),
+                    subtitle: const Text('여행 사진 · 제목 · 메모'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push(
+                      '${AppRoutes.travels}/${travel.id}/photos',
+                    ),
+                  ),
+                  ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    leading: const Icon(Icons.link),
+                    title: const Text('링크'),
+                    subtitle: const Text('자주 쓰는 외부 링크'),
+                    trailing: const Icon(Icons.chevron_right),
+                    onTap: () => context.push(
+                      '${AppRoutes.travels}/${travel.id}/links',
+                    ),
+                  ),
                   const SizedBox(height: 40),
                   Text(
-                    '예약 · 사진 · 링크는 다음 단계에서 추가됩니다.',
+                    '알림 · 오프라인 등은 다음 단계에서 추가됩니다.',
                     style: Theme.of(context).textTheme.bodyMedium,
                     textAlign: TextAlign.center,
                   ),

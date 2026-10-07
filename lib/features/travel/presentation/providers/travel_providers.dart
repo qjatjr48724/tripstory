@@ -6,10 +6,13 @@ import '../../../auth/presentation/providers/auth_providers.dart';
 import '../../data/travel_repository.dart';
 import '../../domain/expense.dart';
 import '../../domain/place.dart';
+import '../../domain/reservation.dart';
 import '../../domain/schedule.dart';
 import '../../domain/settlement.dart';
 import '../../domain/travel.dart';
+import '../../domain/travel_link.dart';
 import '../../domain/travel_member.dart';
+import '../../domain/travel_photo.dart';
 
 final travelRepositoryProvider = Provider<TravelRepository>((ref) {
   final client = Env.isSupabaseReady ? Supabase.instance.client : null;
@@ -63,4 +66,19 @@ final travelExpensesProvider = FutureProvider.autoDispose
 final travelSettlementsProvider = FutureProvider.autoDispose
     .family<List<Settlement>, String>((ref, travelId) async {
   return ref.read(travelRepositoryProvider).fetchSettlements(travelId);
+});
+
+final travelReservationsProvider = FutureProvider.autoDispose
+    .family<List<Reservation>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchReservations(travelId);
+});
+
+final travelPhotosProvider = FutureProvider.autoDispose
+    .family<List<TravelPhoto>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchTravelPhotos(travelId);
+});
+
+final travelLinksProvider = FutureProvider.autoDispose
+    .family<List<TravelLink>, String>((ref, travelId) async {
+  return ref.read(travelRepositoryProvider).fetchTravelLinks(travelId);
 });
