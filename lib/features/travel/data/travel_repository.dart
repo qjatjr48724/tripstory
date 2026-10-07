@@ -1,13 +1,18 @@
+import 'dart:typed_data';
+
 import 'package:supabase_flutter/supabase_flutter.dart';
 
 import '../../../core/config/env.dart';
 import '../../../core/constants/roles.dart';
 import '../domain/expense.dart';
 import '../domain/place.dart';
+import '../domain/reservation.dart';
 import '../domain/schedule.dart';
 import '../domain/settlement.dart';
 import '../domain/travel.dart';
+import '../domain/travel_link.dart';
 import '../domain/travel_member.dart';
+import '../domain/travel_photo.dart';
 
 class TravelException implements Exception {
   TravelException(this.message);
@@ -1222,6 +1227,659 @@ class TravelRepository {
     } catch (e) {
       if (e is TravelException) rethrow;
       throw TravelException('정산 완료 처리에 실패했습니다.');
+    }
+  }
+
+  static const _mediaBucket = 'travel-media';
+
+  Future<String?> _myMemberId(String travelId) async {
+    final members = await fetchMembers(travelId);
+    return members.where((m) => m.isMe).firstOrNull?.id;
+  }
+
+  Future<String?> signedMediaUrl(String storagePath) async {
+    final client = _requireClient;
+    try {
+      return await client.storage
+          .from(_mediaBucket)
+          .createSignedUrl(storagePath, 60 * 60);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String> _uploadMediaBytes({
+    required String travelId,
+    required String folder,
+    required String fileName,
+    required Uint8List bytes,
+    required String contentType,
+  }) async {
+    final client = _requireClient;
+    final path = '$travelId/$folder/$fileName';
+    try {
+      await client.storage.from(_mediaBucket).uploadBinary(
+            path,
+            bytes,
+            fileOptions: FileOptions(
+              contentType: contentType,
+              upsert: true,
+            ),
+          );
+      return path;
+    } on StorageException catch (e) {
+      throw TravelException(e.message);
+    } catch (_) {
+      throw TravelException('이미지 업로드에 실패했습니다.');
+    }
+  }
+
+  Future<void> _deleteMedia(String storagePath) async {
+    final client = _requireClient;
+    try {
+      await client.storage.from(_mediaBucket).remove([storagePath]);
+    } catch (_) {
+      // 파일 삭제 실패는 무시 (DB 정합 우선)
+    }
+  }
+
+  Future<List<Reservation>> fetchReservations(String travelId) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final rows = await client
+          .from('reservations')
+          .select('*, reservation_images(*)')
+          .eq('travel_id', travelId)
+          .order('starts_at', ascending: true);
+
+      return (rows as List)
+          .map(
+            (row) => Reservation.fromJson(
+              Map<String, dynamic>.from(row as Map),
+              membersById: membersById,
+            ),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('예약 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<Reservation> fetchReservation(
+    String travelId,
+    String reservationId,
+  ) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final row = await client
+          .from('reservations')
+          .select('*, reservation_images(*)')
+          .eq('id', reservationId)
+          .eq('travel_id', travelId)
+          .maybeSingle();
+      if (row == null) {
+        throw TravelException('예약을 찾을 수 없습니다.');
+      }
+      return Reservation.fromJson(
+        Map<String, dynamic>.from(row),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('예약 정보를 불러오지 못했습니다.');
+    }
+  }
+
+  Future<Reservation> createReservation({
+    required String travelId,
+    required ReservationType type,
+    required String title,
+    String? bookerMemberId,
+    String? confirmationNumber,
+    int? costAmount,
+    String? costCurrency,
+    DateTime? startsAt,
+    String? confirmationUrl,
+    String? memo,
+    String? lodgingAddress,
+    String? lodgingRoomInfo,
+    List<({Uint8List bytes, String contentType, String ext})> images =
+        const [],
+  }) async {
+    final client = _requireClient;
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) {
+      throw TravelException('예약 제목을 입력하세요.');
+    }
+    try {
+      final row = await client
+          .from('reservations')
+          .insert({
+            'travel_id': travelId,
+            'type': type.dbValue,
+            'title': trimmed,
+            'booker_member_id': bookerMemberId,
+            'confirmation_number': _nullIfEmpty(confirmationNumber),
+            'cost_amount': costAmount,
+            'cost_currency': costCurrency ?? 'KRW',
+            'starts_at': startsAt?.toUtc().toIso8601String(),
+            'confirmation_url': _nullIfEmpty(confirmationUrl),
+            'memo': _nullIfEmpty(memo),
+            'lodging_address':
+                type == ReservationType.lodging
+                    ? _nullIfEmpty(lodgingAddress)
+                    : null,
+            'lodging_room_info':
+                type == ReservationType.lodging
+                    ? _nullIfEmpty(lodgingRoomInfo)
+                    : null,
+          })
+          .select()
+          .single();
+
+      final reservationId = row['id'] as String;
+      final myId = await _myMemberId(travelId);
+      for (var i = 0; i < images.length; i++) {
+        final img = images[i];
+        final path = await _uploadMediaBytes(
+          travelId: travelId,
+          folder: 'reservations',
+          fileName: '${reservationId}_${i}_${DateTime.now().millisecondsSinceEpoch}.${img.ext}',
+          bytes: img.bytes,
+          contentType: img.contentType,
+        );
+        await client.from('reservation_images').insert({
+          'reservation_id': reservationId,
+          'storage_path': path,
+          'created_by_member_id': myId,
+        });
+      }
+
+      var created = await fetchReservation(travelId, reservationId);
+      created = await _syncReservationExpense(
+        reservation: created,
+        type: type,
+        title: trimmed,
+        bookerMemberId: bookerMemberId,
+        costAmount: costAmount,
+        costCurrency: costCurrency ?? 'KRW',
+        startsAt: startsAt,
+      );
+      return created;
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('예약 등록에 실패했습니다.');
+    }
+  }
+
+  Future<Reservation> updateReservation({
+    required Reservation reservation,
+    required ReservationType type,
+    required String title,
+    String? bookerMemberId,
+    String? confirmationNumber,
+    int? costAmount,
+    String? costCurrency,
+    DateTime? startsAt,
+    String? confirmationUrl,
+    String? memo,
+    String? lodgingAddress,
+    String? lodgingRoomInfo,
+    List<({Uint8List bytes, String contentType, String ext})> newImages =
+        const [],
+    List<String> removeImageIds = const [],
+  }) async {
+    final client = _requireClient;
+    final trimmed = title.trim();
+    if (trimmed.isEmpty) {
+      throw TravelException('예약 제목을 입력하세요.');
+    }
+    try {
+      final rows = await client
+          .from('reservations')
+          .update({
+            'type': type.dbValue,
+            'title': trimmed,
+            'booker_member_id': bookerMemberId,
+            'confirmation_number': _nullIfEmpty(confirmationNumber),
+            'cost_amount': costAmount,
+            'cost_currency': costCurrency ?? 'KRW',
+            'starts_at': startsAt?.toUtc().toIso8601String(),
+            'confirmation_url': _nullIfEmpty(confirmationUrl),
+            'memo': _nullIfEmpty(memo),
+            'lodging_address':
+                type == ReservationType.lodging
+                    ? _nullIfEmpty(lodgingAddress)
+                    : null,
+            'lodging_room_info':
+                type == ReservationType.lodging
+                    ? _nullIfEmpty(lodgingRoomInfo)
+                    : null,
+            'version': reservation.version + 1,
+          })
+          .eq('id', reservation.id)
+          .eq('version', reservation.version)
+          .select();
+
+      if ((rows as List).isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 다시 불러온 후 시도해주세요.',
+        );
+      }
+
+      for (final imageId in removeImageIds) {
+        final img = reservation.images.where((e) => e.id == imageId).firstOrNull;
+        if (img != null) {
+          await _deleteMedia(img.storagePath);
+          await client.from('reservation_images').delete().eq('id', imageId);
+        }
+      }
+
+      final myId = await _myMemberId(reservation.travelId);
+      for (var i = 0; i < newImages.length; i++) {
+        final img = newImages[i];
+        final path = await _uploadMediaBytes(
+          travelId: reservation.travelId,
+          folder: 'reservations',
+          fileName:
+              '${reservation.id}_n${i}_${DateTime.now().millisecondsSinceEpoch}.${img.ext}',
+          bytes: img.bytes,
+          contentType: img.contentType,
+        );
+        await client.from('reservation_images').insert({
+          'reservation_id': reservation.id,
+          'storage_path': path,
+          'created_by_member_id': myId,
+        });
+      }
+
+      var updated = await fetchReservation(reservation.travelId, reservation.id);
+      updated = await _syncReservationExpense(
+        reservation: updated,
+        type: type,
+        title: trimmed,
+        bookerMemberId: bookerMemberId,
+        costAmount: costAmount,
+        costCurrency: costCurrency ?? 'KRW',
+        startsAt: startsAt,
+      );
+      return updated;
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('예약 수정에 실패했습니다.');
+    }
+  }
+
+  Future<void> deleteReservation(Reservation reservation) async {
+    final client = _requireClient;
+    try {
+      for (final img in reservation.images) {
+        await _deleteMedia(img.storagePath);
+      }
+      final linkedId = reservation.linkedExpenseId;
+      await client.from('reservations').delete().eq('id', reservation.id);
+      if (linkedId != null) {
+        await _deleteLinkedExpenseIfEditable(
+          travelId: reservation.travelId,
+          expenseId: linkedId,
+        );
+      }
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('예약 삭제에 실패했습니다.');
+    }
+  }
+
+  /// 예약 비용 → 비용 장부 동기화 (활성 구성원 1/N, 결제자=예약자).
+  Future<Reservation> _syncReservationExpense({
+    required Reservation reservation,
+    required ReservationType type,
+    required String title,
+    String? bookerMemberId,
+    int? costAmount,
+    required String costCurrency,
+    DateTime? startsAt,
+  }) async {
+    final client = _requireClient;
+    final amount = costAmount ?? 0;
+    final linkedId = reservation.linkedExpenseId;
+
+    if (amount <= 0) {
+      if (linkedId != null) {
+        await _deleteLinkedExpenseIfEditable(
+          travelId: reservation.travelId,
+          expenseId: linkedId,
+        );
+        await client
+            .from('reservations')
+            .update({'linked_expense_id': null})
+            .eq('id', reservation.id);
+        return fetchReservation(reservation.travelId, reservation.id);
+      }
+      return reservation;
+    }
+
+    final members = await fetchMembers(reservation.travelId);
+    final activeIds = members
+        .where((m) => m.status == MemberStatus.active)
+        .map((m) => m.id)
+        .toList();
+    if (activeIds.isEmpty) {
+      throw TravelException('활성 구성원이 없어 비용을 등록할 수 없습니다.');
+    }
+
+    final payerId = bookerMemberId ??
+        members.where((m) => m.isMe).firstOrNull?.id ??
+        activeIds.first;
+    final category = switch (type) {
+      ReservationType.transport => ExpenseCategory.transport,
+      ReservationType.lodging => ExpenseCategory.lodging,
+      ReservationType.other => ExpenseCategory.other,
+    };
+    final paidAt = startsAt ?? DateTime.now();
+    final description = title;
+
+    if (linkedId != null) {
+      try {
+        final existing =
+            await fetchExpense(reservation.travelId, linkedId);
+        if (existing.isSettlementCompleted) {
+          return reservation;
+        }
+        await updateExpense(
+          expense: existing,
+          category: category,
+          amount: amount,
+          currency: costCurrency,
+          payerMemberId: payerId,
+          paymentMethod: existing.paymentMethod,
+          paidAt: paidAt,
+          splitType: SplitType.equal,
+          participantMemberIds: activeIds,
+          description: description,
+        );
+        return fetchReservation(reservation.travelId, reservation.id);
+      } on TravelException {
+        // 연결된 비용이 없으면 새로 만든다.
+      }
+    }
+
+    final created = await createExpense(
+      travelId: reservation.travelId,
+      category: category,
+      amount: amount,
+      currency: costCurrency,
+      payerMemberId: payerId,
+      paymentMethod: PaymentMethod.card,
+      paidAt: paidAt,
+      splitType: SplitType.equal,
+      participantMemberIds: activeIds,
+      description: description,
+    );
+    await client
+        .from('reservations')
+        .update({'linked_expense_id': created.id})
+        .eq('id', reservation.id);
+    return fetchReservation(reservation.travelId, reservation.id);
+  }
+
+  Future<void> _deleteLinkedExpenseIfEditable({
+    required String travelId,
+    required String expenseId,
+  }) async {
+    try {
+      final expense = await fetchExpense(travelId, expenseId);
+      if (expense.isSettlementCompleted) return;
+      await deleteExpense(expense);
+    } on TravelException {
+      // 이미 없거나 삭제 불가면 무시
+    }
+  }
+
+  Future<List<TravelPhoto>> fetchTravelPhotos(String travelId) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final rows = await client
+          .from('travel_photos')
+          .select()
+          .eq('travel_id', travelId)
+          .order('created_at', ascending: false);
+
+      return (rows as List)
+          .map(
+            (row) => TravelPhoto.fromJson(
+              Map<String, dynamic>.from(row as Map),
+              membersById: membersById,
+            ),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('사진 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<TravelPhoto> createTravelPhoto({
+    required String travelId,
+    required Uint8List bytes,
+    required String contentType,
+    required String ext,
+    String? title,
+    String? memo,
+  }) async {
+    final client = _requireClient;
+    try {
+      final myId = await _myMemberId(travelId);
+      final path = await _uploadMediaBytes(
+        travelId: travelId,
+        folder: 'photos',
+        fileName: '${DateTime.now().millisecondsSinceEpoch}.$ext',
+        bytes: bytes,
+        contentType: contentType,
+      );
+      final row = await client
+          .from('travel_photos')
+          .insert({
+            'travel_id': travelId,
+            'storage_path': path,
+            'title': _nullIfEmpty(title),
+            'memo': _nullIfEmpty(memo),
+            'uploaded_by_member_id': myId,
+          })
+          .select()
+          .single();
+      final membersById = await _membersById(travelId);
+      return TravelPhoto.fromJson(
+        Map<String, dynamic>.from(row),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('사진 등록에 실패했습니다.');
+    }
+  }
+
+  Future<TravelPhoto> updateTravelPhoto({
+    required TravelPhoto photo,
+    String? title,
+    String? memo,
+  }) async {
+    final client = _requireClient;
+    try {
+      final row = await client
+          .from('travel_photos')
+          .update({
+            'title': _nullIfEmpty(title),
+            'memo': _nullIfEmpty(memo),
+          })
+          .eq('id', photo.id)
+          .select()
+          .single();
+      final membersById = await _membersById(photo.travelId);
+      return TravelPhoto.fromJson(
+        Map<String, dynamic>.from(row),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('사진 수정에 실패했습니다.');
+    }
+  }
+
+  Future<void> deleteTravelPhoto(TravelPhoto photo) async {
+    final client = _requireClient;
+    try {
+      await _deleteMedia(photo.storagePath);
+      await client.from('travel_photos').delete().eq('id', photo.id);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('사진 삭제에 실패했습니다.');
+    }
+  }
+
+  Future<List<TravelLink>> fetchTravelLinks(String travelId) async {
+    final client = _requireClient;
+    try {
+      final membersById = await _membersById(travelId);
+      final rows = await client
+          .from('travel_links')
+          .select()
+          .eq('travel_id', travelId)
+          .order('created_at', ascending: false);
+
+      return (rows as List)
+          .map(
+            (row) => TravelLink.fromJson(
+              Map<String, dynamic>.from(row as Map),
+              membersById: membersById,
+            ),
+          )
+          .toList();
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('링크 목록을 불러오지 못했습니다.');
+    }
+  }
+
+  Future<TravelLink> createTravelLink({
+    required String travelId,
+    required String title,
+    required String url,
+    String? memo,
+  }) async {
+    final client = _requireClient;
+    final trimmedTitle = title.trim();
+    final trimmedUrl = url.trim();
+    if (trimmedTitle.isEmpty) {
+      throw TravelException('링크 제목을 입력하세요.');
+    }
+    if (trimmedUrl.isEmpty) {
+      throw TravelException('URL을 입력하세요.');
+    }
+    try {
+      final myId = await _myMemberId(travelId);
+      final row = await client
+          .from('travel_links')
+          .insert({
+            'travel_id': travelId,
+            'title': trimmedTitle,
+            'url': trimmedUrl,
+            'memo': _nullIfEmpty(memo),
+            'created_by_member_id': myId,
+          })
+          .select()
+          .single();
+      final membersById = await _membersById(travelId);
+      return TravelLink.fromJson(
+        Map<String, dynamic>.from(row),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('링크 등록에 실패했습니다.');
+    }
+  }
+
+  Future<TravelLink> updateTravelLink({
+    required TravelLink link,
+    required String title,
+    required String url,
+    String? memo,
+  }) async {
+    final client = _requireClient;
+    final trimmedTitle = title.trim();
+    final trimmedUrl = url.trim();
+    if (trimmedTitle.isEmpty) {
+      throw TravelException('링크 제목을 입력하세요.');
+    }
+    if (trimmedUrl.isEmpty) {
+      throw TravelException('URL을 입력하세요.');
+    }
+    try {
+      final rows = await client
+          .from('travel_links')
+          .update({
+            'title': trimmedTitle,
+            'url': trimmedUrl,
+            'memo': _nullIfEmpty(memo),
+            'version': link.version + 1,
+          })
+          .eq('id', link.id)
+          .eq('version', link.version)
+          .select();
+      if ((rows as List).isEmpty) {
+        throw TravelException(
+          '다른 구성원이 이 내용을 수정했습니다. 다시 불러온 후 시도해주세요.',
+        );
+      }
+      final membersById = await _membersById(link.travelId);
+      return TravelLink.fromJson(
+        Map<String, dynamic>.from(rows.first as Map),
+        membersById: membersById,
+      );
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('링크 수정에 실패했습니다.');
+    }
+  }
+
+  Future<void> deleteTravelLink(TravelLink link) async {
+    final client = _requireClient;
+    try {
+      await client.from('travel_links').delete().eq('id', link.id);
+    } on PostgrestException catch (e) {
+      throw TravelException(_mapError(e.message));
+    } catch (e) {
+      if (e is TravelException) rethrow;
+      throw TravelException('링크 삭제에 실패했습니다.');
     }
   }
 
